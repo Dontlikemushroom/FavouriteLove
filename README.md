@@ -31,6 +31,7 @@ A TikTok-like video feed application that runs on your local network. This appli
 ## Setup Instructions
 
 1. Clone the repository
+
 2. Install frontend dependencies:
    ```bash
    npm install
@@ -45,8 +46,13 @@ A TikTok-like video feed application that runs on your local network. This appli
 4. Add your video files:
    - Create a `videos` directory inside the `server` folder
    - Copy your .mp4 video files into the `server/videos` directory
+   - 如果需要分类进行播放视频，可以创建多个文件夹保存不同的视频，使用的时候可以混合也可以单选
+   - Copy your .mp4 video files into the `server/videos`1 directory
+   - Copy your .mp4 video files into the `server/videos`1 directory
 
 ## Running the Application
+
+- 启动前还需要修改访问IP地址，在文件中找到vite.config.ts和src/components/VideoFeed.tsx两个文件，修改里面的地址信息，默认保存为localhost，这是方便进行在本地查看是否能跑通，若是需要进行手机访问，让电脑和手机连接相同的局域网，并且修改localhost为无线局域网适配器的IPV4
 
 1. Start the backend server:
    ```bash

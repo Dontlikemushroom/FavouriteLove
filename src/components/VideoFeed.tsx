@@ -15,7 +15,7 @@ interface VideoFeedProps {
   selectedCategory: string;
 }
 
-const API_BASE_URL = 'http://172.20.10.4:3001';
+const API_BASE_URL = 'http://localhost:3001';
 
 // Number of videos to preload
 const PRELOAD_COUNT = 3;
