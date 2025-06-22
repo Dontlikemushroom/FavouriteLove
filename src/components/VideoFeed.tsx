@@ -37,7 +37,6 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
   const [isBuffering, setIsBuffering] = useState(false);
-  const [isVerticalVideo, setIsVerticalVideo] = useState(true);
   const [isVideoReady, setIsVideoReady] = useState(false);
   const [touchFeedback, setTouchFeedback] = useState<string>('');
   
@@ -285,7 +284,6 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
     const video = videoRef.current;
     if (video) {
       setDuration(video.duration);
-      setIsVerticalVideo(video.videoHeight > video.videoWidth);
       setIsVideoReady(true);
       
       // 性能监控：记录加载时间
@@ -680,7 +678,7 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
       sx={{
         width: '100%',
         height: '100vh',
-        bgcolor: 'background.default',
+        bgcolor: 'black',
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
@@ -694,7 +692,7 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
           maxWidth: '500px',
           height: '100vh',
           position: 'relative',
-          bgcolor: 'background.paper',
+          bgcolor: 'black',
           overflow: 'hidden',
           touchAction: 'none',
           cursor: showControls ? 'auto' : 'none',
@@ -723,17 +721,8 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
                 backgroundColor: 'black',
                 borderRadius: '12px',
                 width: '100%',
-                // 根据视频朝向应用不同的布局策略
-                ...(isVerticalVideo
-                  ? { // 竖版视频：填满容器
-                      height: '100%',
-                      objectFit: 'cover',
-                    }
-                  : { // 横版视频：宽度撑满，高度自适应
-                      height: 'auto',
-                      maxHeight: '100%', // 确保视频不会超出屏幕高度
-                    }
-                ),
+                height: '100%',
+                objectFit: 'contain',
               }}
               onLoadStart={handleLoadStart}
               onProgress={handleProgress}
@@ -748,20 +737,6 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
               onPause={() => setIsPlaying(false)}
               onClick={togglePlayPause}
             />
-
-            {!isVerticalVideo && (
-              <Box
-                sx={{
-                  position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  bottom: 0,
-                  bgcolor: 'black',
-                  zIndex: -1,
-                }}
-              />
-            )}
 
             {/* Preload videos */}
             {Array(PRELOAD_COUNT).fill(null).map((_, index) => (
