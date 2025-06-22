@@ -61,37 +61,37 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
   const [lastLoadStart, setLastLoadStart] = useState<number>(0);
 
   useEffect(() => {
+    // 页面加载时清空历史记录
+    localStorage.removeItem('watchHistory');
+    localStorage.removeItem('currentIndex'); // 也清除旧的当前索引
+    setWatchHistory([]);
+    setHistoryIndex(-1);
+    console.log("页面加载：历史记录已清空。");
+
     const fetchVideos = async () => {
+      setLoading(true);
+      setError(null);
       try {
         const response = await axios.get(
-          selectedCategory === 'all' 
+          selectedCategory === 'all'
             ? `${API_BASE_URL}/api/videos`
             : `${API_BASE_URL}/api/videos/${selectedCategory}`
         );
-        setVideos(response.data);
-        
-        // 从localStorage恢复观看历史
-        const savedHistory = localStorage.getItem(`watchHistory_${selectedCategory}`);
-        const savedCurrentIndex = localStorage.getItem(`currentIndex_${selectedCategory}`);
-        
-        if (savedHistory && savedCurrentIndex) {
-          const history = JSON.parse(savedHistory);
-          const currentIndex = parseInt(savedCurrentIndex);
-          
-          if (currentIndex < response.data.length) {
-            setWatchHistory(history);
-            setCurrentVideoIndex(currentIndex);
-            setHistoryIndex(history.length - 1);
-          } else {
-            setCurrentVideoIndex(Math.floor(Math.random() * response.data.length));
-          }
+        const fetchedVideos = response.data;
+        setVideos(fetchedVideos);
+
+        // 刷新后随机定位视频
+        if (fetchedVideos.length > 0) {
+          const randomIndex = Math.floor(Math.random() * fetchedVideos.length);
+          setCurrentVideoIndex(randomIndex);
+          console.log(`页面加载：随机定位到视频索引 ${randomIndex}`);
         } else {
-          setCurrentVideoIndex(Math.floor(Math.random() * response.data.length));
+          setCurrentVideoIndex(0);
         }
-        setError(null);
+
       } catch (error) {
         console.error('Error fetching videos:', error);
-        setError('Failed to load videos');
+        setError('Error fetching videos');
       } finally {
         setLoading(false);
       }
@@ -110,24 +110,22 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
 
   // 添加视频到观看历史
   const addToHistory = (videoIndex: number) => {
+    // 避免将同一个视频连续添加到历史记录中
+    if (watchHistory.length > 0 && watchHistory[watchHistory.length - 1] === videoIndex) {
+      return;
+    }
+
     setWatchHistory(prev => {
-      // 避免重复添加相同的视频
-      if (prev.length > 0 && prev[prev.length - 1] === videoIndex) {
-        return prev;
-      }
-      
       const newHistory = [...prev, videoIndex];
       // 限制历史记录长度，避免内存占用过大
       if (newHistory.length > 100) {
         newHistory.shift();
       }
-      
-      // 保存到localStorage
-      localStorage.setItem('watchHistory', JSON.stringify(newHistory));
-      console.log(`添加到历史记录: 视频${videoIndex}，当前历史长度: ${newHistory.length}`);
       return newHistory;
     });
-    setHistoryIndex(-1); // 重置历史索引
+
+    // 每次添加新历史时，重置历史导航索引
+    setHistoryIndex(-1);
   };
 
   // 从历史记录中获取上一个视频
@@ -284,10 +282,11 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
 
   // Handle video metadata loaded
   const handleVideoMetadata = () => {
-    const video = preloadRefs.current[currentVideoIndex];
+    const video = videoRef.current;
     if (video) {
       setDuration(video.duration);
       setIsVerticalVideo(video.videoHeight > video.videoWidth);
+      setIsVideoReady(true);
       
       // 性能监控：记录加载时间
       const currentTime = Date.now();
@@ -371,37 +370,6 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
           }
         }
       }
-    }
-  };
-
-  // Add progress tracking
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
-
-    const handleTimeUpdate = () => {
-      setProgress((video.currentTime / video.duration) * 100);
-    };
-
-    const handleLoadedMetadata = () => {
-      setDuration(video.duration);
-    };
-
-    video.addEventListener('timeupdate', handleTimeUpdate);
-    video.addEventListener('loadedmetadata', handleLoadedMetadata);
-
-    return () => {
-      video.removeEventListener('timeupdate', handleTimeUpdate);
-      video.removeEventListener('loadedmetadata', handleLoadedMetadata);
-    };
-  }, [currentVideoIndex]);
-
-  // Add progress bar change handler
-  const handleProgressChange = (_event: Event, newValue: number | number[]) => {
-    if (videoRef.current && typeof newValue === 'number') {
-      const time = (newValue / 100) * duration;
-      videoRef.current.currentTime = time;
-      setProgress(newValue);
     }
   };
 
@@ -637,7 +605,7 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
 
   // 监控缓冲状态
   const handleProgress = () => {
-    const video = preloadRefs.current[currentVideoIndex];
+    const video = videoRef.current;
     if (video && video.buffered.length > 0) {
       const bufferedEnd = video.buffered.end(video.buffered.length - 1);
       const currentTime = video.currentTime;
@@ -652,14 +620,10 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
 
   // 视频事件处理函数
   const handleTimeUpdate = () => {
-    const video = preloadRefs.current[currentVideoIndex];
-    if (video) {
+    const video = videoRef.current;
+    if (video && video.duration > 0) {
       setProgress((video.currentTime / video.duration) * 100);
     }
-  };
-
-  const handleLoadedMetadata = () => {
-    setIsVideoReady(true);
   };
 
   const handleWaiting = () => setIsBuffering(true);
@@ -667,6 +631,15 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
   const handleCanPlay = () => {
     setIsBuffering(false);
     setIsVideoReady(true);
+  };
+
+  // Add progress bar change handler
+  const handleProgressChange = (_event: Event, newValue: number | number[]) => {
+    if (videoRef.current && typeof newValue === 'number') {
+      const time = (newValue / 100) * duration;
+      videoRef.current.currentTime = time;
+      setProgress(newValue);
+    }
   };
 
   if (loading) {
@@ -740,35 +713,40 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
           <>
             <video
               ref={videoRef}
-              key={videos[currentVideoIndex].url}
+              key={videos[currentVideoIndex].id}
+              className="video-player"
               src={`${API_BASE_URL}${videos[currentVideoIndex].url}`}
-              style={{
-                width: isVerticalVideo ? '100%' : 'auto',
-                height: isVerticalVideo ? '100%' : '100%',
-                maxWidth: '100%',
-                maxHeight: '100%',
-                objectFit: isVerticalVideo ? 'cover' : 'contain',
-              }}
-              controls={false}
+              loop={false}
               playsInline
               preload="auto"
+              style={{
+                backgroundColor: 'black',
+                borderRadius: '12px',
+                width: '100%',
+                // 根据视频朝向应用不同的布局策略
+                ...(isVerticalVideo
+                  ? { // 竖版视频：填满容器
+                      height: '100%',
+                      objectFit: 'cover',
+                    }
+                  : { // 横版视频：宽度撑满，高度自适应
+                      height: 'auto',
+                      maxHeight: '100%', // 确保视频不会超出屏幕高度
+                    }
+                ),
+              }}
               onLoadStart={handleLoadStart}
               onProgress={handleProgress}
               onLoadedMetadata={handleVideoMetadata}
               onEnded={handleVideoEnd}
               onError={handleVideoError}
               onTimeUpdate={handleTimeUpdate}
-              onLoadedData={handleLoadedMetadata}
               onWaiting={handleWaiting}
               onPlaying={handlePlaying}
               onCanPlay={handleCanPlay}
-              onPlay={() => {
-                setIsPlaying(true);
-                if (videoRef.current) {
-                  videoRef.current.muted = false;
-                }
-              }}
+              onPlay={() => setIsPlaying(true)}
               onPause={() => setIsPlaying(false)}
+              onClick={togglePlayPause}
             />
 
             {!isVerticalVideo && (
