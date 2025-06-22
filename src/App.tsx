@@ -22,6 +22,17 @@ const theme = createTheme({
 
 function App() {
   const [selectedCategory, setSelectedCategory] = useState('all');
+  const [isDebugMode, setIsDebugMode] = useState(() => {
+    // 从localStorage读取用户之前的模式选择
+    const savedMode = localStorage.getItem('videoPlayerMode');
+    return savedMode === 'debug';
+  });
+
+  const toggleDebugMode = () => {
+    const newMode = !isDebugMode;
+    setIsDebugMode(newMode);
+    localStorage.setItem('videoPlayerMode', newMode ? 'debug' : 'user');
+  };
 
   return (
     <ThemeProvider theme={theme}>
@@ -29,10 +40,12 @@ function App() {
       <Router>
         <Navbar 
           selectedCategory={selectedCategory} 
-          onCategoryChange={(category) => setSelectedCategory(category)} 
+          onCategoryChange={(category) => setSelectedCategory(category)}
+          isDebugMode={isDebugMode}
+          onToggleDebugMode={toggleDebugMode}
         />
         <Routes>
-          <Route path="/" element={<VideoFeed selectedCategory={selectedCategory} />} />
+          <Route path="/" element={<VideoFeed selectedCategory={selectedCategory} isDebugMode={isDebugMode} />} />
         </Routes>
       </Router>
     </ThemeProvider>

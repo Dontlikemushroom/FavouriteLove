@@ -13,6 +13,7 @@ interface Video {
 
 interface VideoFeedProps {
   selectedCategory: string;
+  isDebugMode: boolean;
 }
 
 const API_BASE_URL = 'http://192.168.104.88:3001';
@@ -20,7 +21,7 @@ const API_BASE_URL = 'http://192.168.104.88:3001';
 // Number of videos to preload
 const PRELOAD_COUNT = 3;
 
-const VideoFeed = ({ selectedCategory }: VideoFeedProps) => {
+const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
   const [currentVideoIndex, setCurrentVideoIndex] = useState(0);
   const [watchHistory, setWatchHistory] = useState<number[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
@@ -38,6 +39,12 @@ const VideoFeed = ({ selectedCategory }: VideoFeedProps) => {
   const [isBuffering, setIsBuffering] = useState(false);
   const [isVerticalVideo, setIsVerticalVideo] = useState(true);
   const [isVideoReady, setIsVideoReady] = useState(false);
+  const [touchFeedback, setTouchFeedback] = useState<string>('');
+  
+  const [randomPlayQueue, setRandomPlayQueue] = useState<number[]>([]);
+  const [sequentialCount, setSequentialCount] = useState(0);
+  const SEQUENTIAL_BATCH_SIZE = 5;
+  
   const autoPlayAttemptRef = useRef<number>(0);
   const maxAutoPlayAttempts = 3;
   
@@ -46,8 +53,11 @@ const VideoFeed = ({ selectedCategory }: VideoFeedProps) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const controlsTimeoutRef = useRef<number | null>(null);
   const preloadRefs = useRef<(HTMLVideoElement | null)[]>([]);
-  const [touchFeedback, setTouchFeedback] = useState<string>('');
-  const [touchDirection, setTouchDirection] = useState<'up' | 'down' | ''>('');
+
+  // 新增：性能监控状态
+  const [loadTime, setLoadTime] = useState<number>(0);
+  const [bufferLevel, setBufferLevel] = useState<number>(0);
+  const [lastLoadStart, setLastLoadStart] = useState<number>(0);
 
   useEffect(() => {
     const fetchVideos = async () => {
@@ -99,44 +109,47 @@ const VideoFeed = ({ selectedCategory }: VideoFeedProps) => {
 
   // 添加视频到观看历史
   const addToHistory = (videoIndex: number) => {
-    // 避免重复添加相同的视频
-    if (watchHistory.length === 0 || watchHistory[watchHistory.length - 1] !== videoIndex) {
-      // 如果当前在历史记录中浏览，清除当前位置之后的历史记录
-      let newHistory;
-      if (historyIndex >= 0 && historyIndex < watchHistory.length - 1) {
-        // 用户从历史记录中继续观看新视频，清除当前位置之后的历史
-        newHistory = watchHistory.slice(0, historyIndex + 1);
-      } else {
-        newHistory = [...watchHistory];
+    setWatchHistory(prev => {
+      // 避免重复添加相同的视频
+      if (prev.length > 0 && prev[prev.length - 1] === videoIndex) {
+        return prev;
       }
       
-      newHistory.push(videoIndex);
-      setWatchHistory(newHistory);
-      // 当添加新视频到历史时，重置historyIndex为-1（表示当前不在历史记录中）
-      setHistoryIndex(-1);
+      const newHistory = [...prev, videoIndex];
+      // 限制历史记录长度，避免内存占用过大
+      if (newHistory.length > 100) {
+        newHistory.shift();
+      }
       
-      // 调试信息：在控制台显示历史记录状态
-      console.log(`添加视频${videoIndex}到历史记录，当前历史:`, newHistory, '播放模式:', isRandomPlay ? '随机' : '顺序');
-    }
+      // 保存到localStorage
+      localStorage.setItem('watchHistory', JSON.stringify(newHistory));
+      console.log(`添加到历史记录: 视频${videoIndex}，当前历史长度: ${newHistory.length}`);
+      return newHistory;
+    });
+    setHistoryIndex(-1); // 重置历史索引
   };
 
   // 从历史记录中获取上一个视频
   const getPreviousFromHistory = () => {
-    // 如果当前在历史记录中，返回上一个视频
+    if (watchHistory.length === 0) {
+      return null;
+    }
+
+    // 如果当前不在历史记录中浏览，从最后一个历史记录开始
+    if (historyIndex === -1) {
+      const lastWatchedIndex = watchHistory[watchHistory.length - 1];
+      setHistoryIndex(watchHistory.length - 1);
+      return lastWatchedIndex;
+    }
+
+    // 如果已经在历史记录中，继续向前浏览
     if (historyIndex > 0) {
       const prevIndex = historyIndex - 1;
       setHistoryIndex(prevIndex);
-      console.log(`从历史记录位置${historyIndex}回到位置${prevIndex}，视频:`, watchHistory[prevIndex]);
       return watchHistory[prevIndex];
     }
-    // 如果当前不在历史记录中，但有历史记录，返回最后一个历史视频
-    else if (watchHistory.length > 0) {
-      const lastIndex = watchHistory.length - 1;
-      setHistoryIndex(lastIndex);
-      console.log(`从新视频回到历史记录最后位置${lastIndex}，视频:`, watchHistory[lastIndex]);
-      return watchHistory[lastIndex];
-    }
-    console.log('没有历史记录可返回');
+
+    // 已经到达历史记录的最开始
     return null;
   };
 
@@ -197,7 +210,10 @@ const VideoFeed = ({ selectedCategory }: VideoFeedProps) => {
 
     const handleWaiting = () => setIsBuffering(true);
     const handlePlaying = () => setIsBuffering(false);
-    const handleCanPlay = () => setIsBuffering(false);
+    const handleCanPlay = () => {
+      setIsBuffering(false);
+      setIsVideoReady(true);
+    };
 
     video.addEventListener('waiting', handleWaiting);
     video.addEventListener('playing', handlePlaying);
@@ -267,13 +283,16 @@ const VideoFeed = ({ selectedCategory }: VideoFeedProps) => {
 
   // Handle video metadata loaded
   const handleVideoMetadata = () => {
-    const video = videoRef.current;
+    const video = preloadRefs.current[currentVideoIndex];
     if (video) {
       setDuration(video.duration);
-      // Check if video is vertical or horizontal
-      const aspectRatio = video.videoWidth / video.videoHeight;
-      setIsVerticalVideo(aspectRatio <= 1);
-      setIsVideoReady(true);
+      setIsVerticalVideo(video.videoHeight > video.videoWidth);
+      
+      // 性能监控：记录加载时间
+      const currentTime = Date.now();
+      if (lastLoadStart > 0) {
+        setLoadTime(currentTime - lastLoadStart);
+      }
     }
   };
 
@@ -287,13 +306,11 @@ const VideoFeed = ({ selectedCategory }: VideoFeedProps) => {
   // Handle video end with enhanced auto-play
   const handleVideoEnd = () => {
     if (autoPlay) {
-      // 记录当前视频作为历史，然后切换到下一个
       const nextIndex = getNextVideoIndex();
-      addToHistory(currentVideoIndex); // 记录当前视频
+      addToHistory(currentVideoIndex);
       setCurrentVideoIndex(nextIndex);
-      // Reset video ready state for next video
-      setIsVideoReady(false);
-      autoPlayAttemptRef.current = 0;
+      // 预加载下一个视频
+      setTimeout(() => preloadNextVideo(), 100);
     }
   };
 
@@ -311,24 +328,53 @@ const VideoFeed = ({ selectedCategory }: VideoFeedProps) => {
   }, [isPlaying]);
 
   // Preload next video
-  useEffect(() => {
-    const preloadNextVideo = () => {
-      const video = preloadRefs.current[0];
-      if (video) {
-        video.preload = "metadata";
-        video.addEventListener('loadedmetadata', () => {
-          // 只加载前30秒
-          if (video.duration > 30) {
-            video.currentTime = 30;
-          }
-        });
-      }
-    };
+  const preloadNextVideo = () => {
+    if (videos.length === 0) return;
 
-    if (videos.length > 0) {
-      preloadNextVideo();
+    // 根据播放模式智能预加载
+    let nextIndex: number;
+    
+    if (!isRandomPlay) {
+      // 顺序播放：预加载下一个视频
+      nextIndex = (currentVideoIndex + 1) % videos.length;
+    } else {
+      // 随机播放：根据当前状态预加载
+      if (sequentialCount < SEQUENTIAL_BATCH_SIZE - 1) {
+        // 顺序播放阶段：预加载下一个顺序视频
+        nextIndex = currentVideoIndex + 1;
+        if (nextIndex >= videos.length) nextIndex = 0;
+      } else if (randomPlayQueue.length > 0) {
+        // 随机播放阶段：预加载队列中的下一个视频
+        nextIndex = randomPlayQueue[0];
+      } else {
+        // 需要生成新队列：预加载第一个视频（通常是0）
+        nextIndex = 0;
+      }
     }
-  }, [currentVideoIndex, videos]);
+
+    // 预加载下一个视频
+    if (preloadRefs.current[nextIndex]) {
+      const video = preloadRefs.current[nextIndex];
+      if (video && video.readyState < 2) { // HAVE_CURRENT_DATA
+        video.load();
+        console.log(`预加载视频 ${nextIndex}: ${videos[nextIndex]?.title}`);
+      }
+    }
+
+    // 额外预加载：在顺序播放阶段，预加载接下来的2-3个视频
+    if (!isRandomPlay || sequentialCount < SEQUENTIAL_BATCH_SIZE - 2) {
+      for (let i = 1; i <= 2; i++) {
+        const futureIndex = (nextIndex + i) % videos.length;
+        if (preloadRefs.current[futureIndex]) {
+          const video = preloadRefs.current[futureIndex];
+          if (video && video.readyState < 2) {
+            video.load();
+            console.log(`额外预加载视频 ${futureIndex}: ${videos[futureIndex]?.title}`);
+          }
+        }
+      }
+    }
+  };
 
   // Add progress tracking
   useEffect(() => {
@@ -373,12 +419,48 @@ const VideoFeed = ({ selectedCategory }: VideoFeedProps) => {
       return (currentVideoIndex + 1) % videos.length;
     }
 
-    let nextIndex;
-    do {
-      nextIndex = Math.floor(Math.random() * videos.length);
-    } while (nextIndex === currentVideoIndex);
-
+    // 新的随机播放逻辑：先顺序播放5个，然后随机5个
+    const nextSequentialCount = sequentialCount + 1;
+    
+    // 如果还在顺序播放阶段
+    if (nextSequentialCount < SEQUENTIAL_BATCH_SIZE) {
+      setSequentialCount(nextSequentialCount);
+      // 确保按顺序播放，不跳过视频
+      const nextIndex = currentVideoIndex + 1;
+      return nextIndex < videos.length ? nextIndex : 0; // 如果到达末尾，回到开头
+    }
+    
+    // 如果顺序播放完成，需要生成新的随机队列
+    if (randomPlayQueue.length === 0) {
+      // 生成5个随机视频
+      const newRandomQueue = generateRandomVideoQueue();
+      setRandomPlayQueue(newRandomQueue);
+      setSequentialCount(0);
+      return newRandomQueue[0];
+    }
+    
+    // 从随机队列中获取下一个视频
+    const nextIndex = randomPlayQueue[0];
+    setRandomPlayQueue(prev => prev.slice(1));
+    setSequentialCount(0);
     return nextIndex;
+  };
+
+  // 生成随机视频队列
+  const generateRandomVideoQueue = () => {
+    const queue: number[] = [];
+    const usedIndices = new Set<number>();
+    
+    // 生成5个不重复的随机视频索引
+    while (queue.length < SEQUENTIAL_BATCH_SIZE) {
+      const randomIndex = Math.floor(Math.random() * videos.length);
+      if (!usedIndices.has(randomIndex) && randomIndex !== currentVideoIndex) {
+        queue.push(randomIndex);
+        usedIndices.add(randomIndex);
+      }
+    }
+    
+    return queue;
   };
 
   const handleVideoError = (e: React.SyntheticEvent<HTMLVideoElement, Event>) => {
@@ -415,7 +497,6 @@ const VideoFeed = ({ selectedCategory }: VideoFeedProps) => {
   const handleTouchStart = (e: React.TouchEvent) => {
     touchStartY.current = e.touches[0].clientY;
     setTouchFeedback('');
-    setTouchDirection('');
   };
 
   const handleTouchEnd = (e: React.TouchEvent) => {
@@ -426,25 +507,51 @@ const VideoFeed = ({ selectedCategory }: VideoFeedProps) => {
     if (Math.abs(deltaY) > 80) {
       if (deltaY < 0) {
         // Swipe up - next video (记录上一个视频，然后切换到下一个)
-        setTouchDirection('up');
         const nextIndex = getNextVideoIndex();
-        const playMode = isRandomPlay ? '随机' : '顺序';
-        setTouchFeedback(`${playMode}下一个视频`);
+        let playModeText = '顺序下一个视频';
+        
+        if (isRandomPlay) {
+          if (sequentialCount < SEQUENTIAL_BATCH_SIZE - 1) {
+            playModeText = `顺序播放 (${sequentialCount + 1}/${SEQUENTIAL_BATCH_SIZE})`;
+          } else if (randomPlayQueue.length > 0) {
+            playModeText = `随机播放 (队列:${randomPlayQueue.length})`;
+          } else {
+            playModeText = '生成随机队列';
+          }
+        }
+        
+        // 仅在调试模式下显示触摸反馈
+        if (isDebugMode) {
+          setTouchFeedback(playModeText);
+        }
+        
         // 记录当前视频作为历史（这样下滑时就能回到当前视频）
-        console.log(`上滑：记录视频${currentVideoIndex}，切换到视频${nextIndex}，播放模式: ${playMode}`);
+        console.log(`上滑：记录视频${currentVideoIndex}，切换到视频${nextIndex}，播放模式: ${playModeText}`);
         addToHistory(currentVideoIndex);
         setCurrentVideoIndex(nextIndex);
       } else if (deltaY > 0) {
         // Swipe down - 依次显示历史视频
-        setTouchDirection('down');
         const prevIndex = getPreviousFromHistory();
         if (prevIndex !== null) {
           const remainingHistory = historyIndex >= 0 ? historyIndex : watchHistory.length - 1;
-          setTouchFeedback(`上一个视频 (还有${remainingHistory}个历史)`);
+          // 仅在调试模式下显示触摸反馈
+          if (isDebugMode) {
+            setTouchFeedback(`上一个视频 (还有${remainingHistory}个历史)`);
+          }
           console.log(`下滑：回到视频${prevIndex}，剩余历史: ${remainingHistory}个`);
           setCurrentVideoIndex(prevIndex);
+          // 重要：当从历史记录回到某个视频时，需要重置随机播放状态
+          // 因为用户可能从历史记录中选择了一个不在当前播放序列中的视频
+          if (isRandomPlay) {
+            setRandomPlayQueue([]);
+            setSequentialCount(0);
+            console.log('从历史记录返回，重置随机播放状态');
+          }
         } else {
-          setTouchFeedback('没有更多历史');
+          // 仅在调试模式下显示触摸反馈
+          if (isDebugMode) {
+            setTouchFeedback('没有更多历史');
+          }
           console.log('下滑：没有更多历史记录');
         }
       }
@@ -452,7 +559,6 @@ const VideoFeed = ({ selectedCategory }: VideoFeedProps) => {
       // 清除反馈信息
       setTimeout(() => {
         setTouchFeedback('');
-        setTouchDirection('');
       }, 1000);
     }
   };
@@ -469,17 +575,60 @@ const VideoFeed = ({ selectedCategory }: VideoFeedProps) => {
     }
   };
 
-  const resetLastWatched = () => {
+  const resetHistory = () => {
     setWatchHistory([]);
     setHistoryIndex(-1);
-    localStorage.removeItem(`watchHistory_${selectedCategory}`);
-    localStorage.removeItem(`currentIndex_${selectedCategory}`);
-    setCurrentVideoIndex(Math.floor(Math.random() * videos.length));
+    // 重置随机播放状态
+    setRandomPlayQueue([]);
+    setSequentialCount(0);
+    localStorage.removeItem('watchHistory');
+    console.log('历史记录已重置，随机播放状态也已重置');
   };
 
   // 切换底部面板显示
   const toggleBottomPanel = () => {
     setShowBottomPanel(!showBottomPanel);
+  };
+
+  // 当视频索引改变时预加载下一个视频
+  useEffect(() => {
+    if (videos.length > 0) {
+      preloadNextVideo();
+    }
+  }, [currentVideoIndex, videos, isRandomPlay, sequentialCount, randomPlayQueue]);
+
+  // 监控缓冲状态
+  const handleProgress = () => {
+    const video = preloadRefs.current[currentVideoIndex];
+    if (video && video.buffered.length > 0) {
+      const bufferedEnd = video.buffered.end(video.buffered.length - 1);
+      const currentTime = video.currentTime;
+      setBufferLevel(bufferedEnd - currentTime);
+    }
+  };
+
+  // 记录加载开始时间
+  const handleLoadStart = () => {
+    setLastLoadStart(Date.now());
+  };
+
+  // 视频事件处理函数
+  const handleTimeUpdate = () => {
+    const video = preloadRefs.current[currentVideoIndex];
+    if (video) {
+      setProgress((video.currentTime / video.duration) * 100);
+    }
+  };
+
+  const handleLoadedMetadata = () => {
+    setIsVideoReady(true);
+  };
+
+  const handleWaiting = () => setIsBuffering(true);
+  const handlePlaying = () => setIsBuffering(false);
+  const handleCanPlay = () => {
+    setIsBuffering(false);
+    setIsVideoReady(true);
   };
 
   if (loading) {
@@ -565,11 +714,16 @@ const VideoFeed = ({ selectedCategory }: VideoFeedProps) => {
               controls={false}
               playsInline
               preload="auto"
+              onLoadStart={handleLoadStart}
+              onProgress={handleProgress}
               onLoadedMetadata={handleVideoMetadata}
-              onCanPlay={() => setIsVideoReady(true)}
-              onWaiting={() => setIsVideoReady(false)}
-              onError={handleVideoError}
               onEnded={handleVideoEnd}
+              onError={handleVideoError}
+              onTimeUpdate={handleTimeUpdate}
+              onLoadedData={handleLoadedMetadata}
+              onWaiting={handleWaiting}
+              onPlaying={handlePlaying}
+              onCanPlay={handleCanPlay}
               onPlay={() => {
                 setIsPlaying(true);
                 if (videoRef.current) {
@@ -629,8 +783,8 @@ const VideoFeed = ({ selectedCategory }: VideoFeedProps) => {
               </Box>
             )}
 
-            {/* Touch feedback indicator */}
-            {touchFeedback && (
+            {/* Touch feedback - 仅在调试模式下显示 */}
+            {isDebugMode && touchFeedback && (
               <Box
                 sx={{
                   position: 'absolute',
@@ -640,14 +794,12 @@ const VideoFeed = ({ selectedCategory }: VideoFeedProps) => {
                   backgroundColor: 'rgba(0, 0, 0, 0.8)',
                   color: 'white',
                   padding: '12px 20px',
-                  borderRadius: '20px',
-                  fontSize: '14px',
+                  borderRadius: '8px',
+                  fontSize: '16px',
                   fontWeight: 'bold',
-                  zIndex: 15,
-                  animation: 'fadeInOut 1s ease-in-out',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '8px',
+                  zIndex: 25,
+                  pointerEvents: 'none',
+                  animation: 'fadeInOut 1.5s ease-in-out',
                   '@keyframes fadeInOut': {
                     '0%': { opacity: 0, transform: 'translate(-50%, -50%) scale(0.8)' },
                     '20%': { opacity: 1, transform: 'translate(-50%, -50%) scale(1)' },
@@ -656,12 +808,6 @@ const VideoFeed = ({ selectedCategory }: VideoFeedProps) => {
                   },
                 }}
               >
-                <span style={{ 
-                  fontSize: '18px',
-                  color: touchDirection === 'up' ? '#4CAF50' : touchDirection === 'down' ? '#FF9800' : 'white'
-                }}>
-                  {touchDirection === 'up' ? '↑' : touchDirection === 'down' ? '↓' : ''}
-                </span>
                 {touchFeedback}
               </Box>
             )}
@@ -734,16 +880,15 @@ const VideoFeed = ({ selectedCategory }: VideoFeedProps) => {
                 }}
               >
                 {videos[currentVideoIndex].title}
-                {watchHistory.length > 0 && (
-                  <Typography 
-                    variant="caption" 
-                    sx={{ 
-                      color: historyIndex >= 0 ? '#ff4081' : '#4CAF50',
-                      backgroundColor: historyIndex >= 0 ? 'rgba(255, 64, 129, 0.2)' : 'rgba(76, 175, 80, 0.2)',
-                      padding: '2px 6px',
-                      borderRadius: '4px',
-                      fontSize: '0.7rem'
-                    }}
+                {isDebugMode && watchHistory.length > 0 && (
+                  <Typography variant="body2" sx={{ 
+                    color: historyIndex >= 0 ? '#ff4081' : '#4CAF50',
+                    backgroundColor: historyIndex >= 0 ? 'rgba(255, 64, 129, 0.2)' : 'rgba(76, 175, 80, 0.2)',
+                    fontSize: '0.7rem',
+                    ml: 1,
+                    padding: '2px 6px',
+                    borderRadius: '4px',
+                  }}
                   >
                     {historyIndex >= 0 
                       ? `历史浏览 (${historyIndex + 1}/${watchHistory.length})`
@@ -799,7 +944,7 @@ const VideoFeed = ({ selectedCategory }: VideoFeedProps) => {
                 <Button
                   variant="outlined"
                   size="small"
-                  onClick={resetLastWatched}
+                  onClick={resetHistory}
                   sx={{
                     color: 'white',
                     borderColor: 'rgba(255, 255, 255, 0.5)',
@@ -815,6 +960,32 @@ const VideoFeed = ({ selectedCategory }: VideoFeedProps) => {
                 >
                   重置记录 ({watchHistory.length})
                 </Button>
+                {isDebugMode && (
+                  <Typography variant="body2" sx={{ 
+                    color: historyIndex >= 0 ? '#ff4081' : '#4CAF50',
+                    backgroundColor: historyIndex >= 0 ? 'rgba(255, 64, 129, 0.2)' : 'rgba(76, 175, 80, 0.2)',
+                    fontSize: '0.7rem',
+                    ml: 1,
+                    padding: '2px 6px',
+                    borderRadius: '4px',
+                  }}
+                >
+                  历史位置: {historyIndex >= 0 ? historyIndex : '无'}
+                </Typography>
+                )}
+                {isDebugMode && (
+                  <Typography variant="body2" sx={{ 
+                    color: watchHistory.length > 0 ? '#4CAF50' : 'rgba(255, 255, 255, 0.7)',
+                    backgroundColor: watchHistory.length > 0 ? 'rgba(76, 175, 80, 0.2)' : 'rgba(0, 0, 0, 0.3)',
+                    fontSize: '0.7rem',
+                    ml: 1,
+                    padding: '2px 6px',
+                    borderRadius: '4px',
+                  }}
+                >
+                  历史浏览: {watchHistory.length > 0 ? `${watchHistory.length}个视频` : '无'}
+                </Typography>
+                )}
                 <Box sx={{ 
                   display: 'flex', 
                   alignItems: 'center', 
@@ -939,7 +1110,7 @@ const VideoFeed = ({ selectedCategory }: VideoFeedProps) => {
               </IconButton>
 
               <IconButton
-                onClick={resetLastWatched}
+                onClick={resetHistory}
                 sx={{
                   backgroundColor: 'rgba(0, 0, 0, 0.6)',
                   color: 'white',
@@ -972,6 +1143,41 @@ const VideoFeed = ({ selectedCategory }: VideoFeedProps) => {
                 {showBottomPanel ? '▼' : '▲'}
               </IconButton>
             </Box>
+
+            {/* Debug info - 仅在调试模式下显示 */}
+            {isDebugMode && (
+              <Box
+                sx={{
+                  position: 'absolute',
+                  top: '10px',
+                  left: '10px',
+                  backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                  color: 'white',
+                  padding: '8px',
+                  borderRadius: '4px',
+                  fontSize: '12px',
+                  zIndex: 30,
+                  maxWidth: '300px',
+                }}
+              >
+                <div>当前视频: {currentVideoIndex}</div>
+                <div>播放模式: {isRandomPlay ? '随机' : '顺序'}</div>
+                {isRandomPlay && (
+                  <>
+                    <div>顺序计数: {sequentialCount}/{SEQUENTIAL_BATCH_SIZE}</div>
+                    <div>随机队列: {randomPlayQueue.length}个</div>
+                    {randomPlayQueue.length > 0 && (
+                      <div>队列内容: {randomPlayQueue.join(', ')}</div>
+                    )}
+                  </>
+                )}
+                <div>历史记录: {watchHistory.length}个</div>
+                <div>历史位置: {historyIndex}</div>
+                <div>加载时间: {loadTime}ms</div>
+                <div>缓冲级别: {bufferLevel.toFixed(1)}s</div>
+                <div>视频就绪: {isVideoReady ? '是' : '否'}</div>
+              </Box>
+            )}
           </>
         ) : (
           <Box
