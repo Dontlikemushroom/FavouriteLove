@@ -10,9 +10,9 @@ const HOST = '0.0.0.0';
 
 // 定义视频目录映射
 const VIDEO_DIRS = {
-  'videos': 'G:\\videos',
-  'videos1': 'G:\\videos1',
-  'videos2': 'G:\\videos2'
+  'videos': '.\\videos',
+  'videos1': '.\\videos1',
+  'videos2': '.\\videos2'
 };
 
 // 初始化缓存
