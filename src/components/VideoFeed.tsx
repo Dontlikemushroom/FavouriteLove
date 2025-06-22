@@ -41,9 +41,10 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
   const [isVideoReady, setIsVideoReady] = useState(false);
   const [touchFeedback, setTouchFeedback] = useState<string>('');
   
-  const [randomPlayQueue, setRandomPlayQueue] = useState<number[]>([]);
-  const [sequentialCount, setSequentialCount] = useState(0);
-  const SEQUENTIAL_BATCH_SIZE = 5;
+  const [primaryQueue, setPrimaryQueue] = useState<number[]>([]);
+  const [secondaryQueue, setSecondaryQueue] = useState<number[]>([]);
+  const [queueIndex, setQueueIndex] = useState(0);
+  const QUEUE_SIZE = 5;
   
   const autoPlayAttemptRef = useRef<number>(0);
   const maxAutoPlayAttempts = 3;
@@ -339,15 +340,12 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
       nextIndex = (currentVideoIndex + 1) % videos.length;
     } else {
       // 随机播放：根据当前状态预加载
-      if (sequentialCount < SEQUENTIAL_BATCH_SIZE - 1) {
+      if (queueIndex < QUEUE_SIZE - 1) {
         // 顺序播放阶段：预加载下一个顺序视频
         nextIndex = currentVideoIndex + 1;
         if (nextIndex >= videos.length) nextIndex = 0;
-      } else if (randomPlayQueue.length > 0) {
-        // 随机播放阶段：预加载队列中的下一个视频
-        nextIndex = randomPlayQueue[0];
       } else {
-        // 需要生成新队列：预加载第一个视频（通常是0）
+        // 准备生成新队列：预加载第一个视频（通常是0）
         nextIndex = 0;
       }
     }
@@ -362,7 +360,7 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
     }
 
     // 额外预加载：在顺序播放阶段，预加载接下来的2-3个视频
-    if (!isRandomPlay || sequentialCount < SEQUENTIAL_BATCH_SIZE - 2) {
+    if (!isRandomPlay || queueIndex < QUEUE_SIZE - 2) {
       for (let i = 1; i <= 2; i++) {
         const futureIndex = (nextIndex + i) % videos.length;
         if (preloadRefs.current[futureIndex]) {
@@ -419,49 +417,92 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
       return (currentVideoIndex + 1) % videos.length;
     }
 
-    // 新的随机播放逻辑：先顺序播放5个，然后随机5个
-    const nextSequentialCount = sequentialCount + 1;
-    
-    // 如果还在顺序播放阶段
-    if (nextSequentialCount < SEQUENTIAL_BATCH_SIZE) {
-      setSequentialCount(nextSequentialCount);
-      // 确保按顺序播放，不跳过视频
-      const nextIndex = currentVideoIndex + 1;
-      return nextIndex < videos.length ? nextIndex : 0; // 如果到达末尾，回到开头
+    // 如果主队列为空，则强制重新初始化
+    if (primaryQueue.length === 0) {
+      console.warn("主队列为空，正在重新生成...");
+      const newPrimary = generateRandomVideoQueue();
+      const newSecondary = generateRandomVideoQueue(new Set(newPrimary));
+      setPrimaryQueue(newPrimary);
+      setSecondaryQueue(newSecondary);
+      setQueueIndex(0);
+      return newPrimary[0];
     }
-    
-    // 如果顺序播放完成，需要生成新的随机队列
-    if (randomPlayQueue.length === 0) {
-      // 生成5个随机视频
-      const newRandomQueue = generateRandomVideoQueue();
-      setRandomPlayQueue(newRandomQueue);
-      setSequentialCount(0);
-      return newRandomQueue[0];
+
+    const nextQueueIndex = queueIndex + 1;
+
+    // 如果主队列中还有视频，则播放下一个
+    if (nextQueueIndex < primaryQueue.length) {
+      setQueueIndex(nextQueueIndex);
+      const nextVideo = primaryQueue[nextQueueIndex];
+      console.log(`播放主队列下一个视频: ${nextVideo} (位置: ${nextQueueIndex + 1}/${QUEUE_SIZE})`);
+      return nextVideo;
     }
+
+    // 主队列播放完毕，启用备用队列，并生成新的备用队列
+    console.log("主队列播放完毕，启用备用队列...");
+    const newPrimary = secondaryQueue;
+    const newSecondary = generateRandomVideoQueue(new Set(newPrimary));
+
+    setPrimaryQueue(newPrimary);
+    setSecondaryQueue(newSecondary);
+    setQueueIndex(0);
     
-    // 从随机队列中获取下一个视频
-    const nextIndex = randomPlayQueue[0];
-    setRandomPlayQueue(prev => prev.slice(1));
-    setSequentialCount(0);
-    return nextIndex;
+    console.log('新主队列:', newPrimary);
+    console.log('新备用队列:', newSecondary);
+
+    // 返回新主队列的第一个视频
+    return newPrimary[0];
   };
 
-  // 生成随机视频队列
-  const generateRandomVideoQueue = () => {
+  // 生成随机视频队列，可以传入需要排除的索引
+  const generateRandomVideoQueue = (excludeIndices: Set<number> = new Set()) => {
     const queue: number[] = [];
-    const usedIndices = new Set<number>();
+    const usedIndices = new Set(excludeIndices);
+    usedIndices.add(currentVideoIndex); // 总是排除当前视频
+
+    // 如果可选的视频太少，就允许重复
+    const availableVideos = videos.length - usedIndices.size;
+    if (availableVideos < QUEUE_SIZE) {
+      console.warn("可用视频不足，允许在队列中出现重复");
+      usedIndices.clear();
+      usedIndices.add(currentVideoIndex);
+    }
     
-    // 生成5个不重复的随机视频索引
-    while (queue.length < SEQUENTIAL_BATCH_SIZE) {
+    while (queue.length < QUEUE_SIZE) {
       const randomIndex = Math.floor(Math.random() * videos.length);
-      if (!usedIndices.has(randomIndex) && randomIndex !== currentVideoIndex) {
+      if (!usedIndices.has(randomIndex)) {
         queue.push(randomIndex);
         usedIndices.add(randomIndex);
+      } else if (queue.length + availableVideos < QUEUE_SIZE) {
+        // 如果唯一视频不够，就从头开始允许重复
+        queue.push(randomIndex);
       }
     }
     
     return queue;
   };
+
+  // 初始化或重置随机播放队列
+  useEffect(() => {
+    if (isRandomPlay && videos.length > 0) {
+      if (primaryQueue.length === 0) { // 只在主队列为空时初始化
+        console.log("初始化主、备队列...");
+        const initialPrimary = generateRandomVideoQueue();
+        const initialSecondary = generateRandomVideoQueue(new Set(initialPrimary));
+        
+        setPrimaryQueue(initialPrimary);
+        setSecondaryQueue(initialSecondary);
+        setQueueIndex(0);
+
+        console.log('主队列:', initialPrimary);
+        console.log('备用队列:', initialSecondary);
+      }
+    } else {
+      // 关闭随机播放时清空队列
+      setPrimaryQueue([]);
+      setSecondaryQueue([]);
+    }
+  }, [isRandomPlay, videos.length]);
 
   const handleVideoError = (e: React.SyntheticEvent<HTMLVideoElement, Event>) => {
     console.error('Video playback error:', e);
@@ -511,12 +552,9 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
         let playModeText = '顺序下一个视频';
         
         if (isRandomPlay) {
-          if (sequentialCount < SEQUENTIAL_BATCH_SIZE - 1) {
-            playModeText = `顺序播放 (${sequentialCount + 1}/${SEQUENTIAL_BATCH_SIZE})`;
-          } else if (randomPlayQueue.length > 0) {
-            playModeText = `随机播放 (队列:${randomPlayQueue.length})`;
-          } else {
-            playModeText = '生成随机队列';
+          playModeText = `队列播放 (${queueIndex + 1}/${QUEUE_SIZE})`;
+          if (queueIndex >= QUEUE_SIZE - 1) {
+            playModeText += ' - 切换队列';
           }
         }
         
@@ -540,12 +578,13 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
           }
           console.log(`下滑：回到视频${prevIndex}，剩余历史: ${remainingHistory}个`);
           setCurrentVideoIndex(prevIndex);
-          // 重要：当从历史记录回到某个视频时，需要重置随机播放状态
-          // 因为用户可能从历史记录中选择了一个不在当前播放序列中的视频
+          // 重要：当从历史记录回到某个视频时，不要重置队列
+          // 让用户继续使用当前的队列，只是调整位置
           if (isRandomPlay) {
-            setRandomPlayQueue([]);
-            setSequentialCount(0);
-            console.log('从历史记录返回，重置随机播放状态');
+            // 不清空队列，保持当前队列状态
+            // 只是将队列位置重置到开始，这样用户继续向前时会按顺序播放
+            setQueueIndex(0);
+            console.log('从历史记录返回，保持当前队列，重置位置到开始');
           }
         } else {
           // 仅在调试模式下显示触摸反馈
@@ -578,11 +617,10 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
   const resetHistory = () => {
     setWatchHistory([]);
     setHistoryIndex(-1);
-    // 重置随机播放状态
-    setRandomPlayQueue([]);
-    setSequentialCount(0);
+    // 重置历史记录，但不清空队列
+    // 这样用户可以继续使用当前的随机播放队列
     localStorage.removeItem('watchHistory');
-    console.log('历史记录已重置，随机播放状态也已重置');
+    console.log('历史记录已重置，但保持当前队列');
   };
 
   // 切换底部面板显示
@@ -595,7 +633,7 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
     if (videos.length > 0) {
       preloadNextVideo();
     }
-  }, [currentVideoIndex, videos, isRandomPlay, sequentialCount, randomPlayQueue]);
+  }, [currentVideoIndex, videos, isRandomPlay, queueIndex, primaryQueue]);
 
   // 监控缓冲状态
   const handleProgress = () => {
@@ -969,9 +1007,9 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
                     padding: '2px 6px',
                     borderRadius: '4px',
                   }}
-                >
-                  历史位置: {historyIndex >= 0 ? historyIndex : '无'}
-                </Typography>
+                  >
+                    历史位置: {historyIndex >= 0 ? historyIndex : '无'}
+                  </Typography>
                 )}
                 {isDebugMode && (
                   <Typography variant="body2" sx={{ 
@@ -982,9 +1020,9 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
                     padding: '2px 6px',
                     borderRadius: '4px',
                   }}
-                >
-                  历史浏览: {watchHistory.length > 0 ? `${watchHistory.length}个视频` : '无'}
-                </Typography>
+                  >
+                    历史浏览: {watchHistory.length > 0 ? `${watchHistory.length}个视频` : '无'}
+                  </Typography>
                 )}
                 <Box sx={{ 
                   display: 'flex', 
@@ -1149,33 +1187,71 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
               <Box
                 sx={{
                   position: 'absolute',
-                  top: '10px',
+                  top: '70px',
                   left: '10px',
-                  backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                  backgroundColor: 'rgba(0, 0, 0, 0.8)',
                   color: 'white',
-                  padding: '8px',
-                  borderRadius: '4px',
+                  padding: '12px',
+                  borderRadius: '8px',
                   fontSize: '12px',
                   zIndex: 30,
-                  maxWidth: '300px',
+                  maxWidth: '350px',
+                  border: '1px solid rgba(255, 255, 255, 0.2)',
                 }}
               >
-                <div>当前视频: {currentVideoIndex}</div>
-                <div>播放模式: {isRandomPlay ? '随机' : '顺序'}</div>
+                <div style={{ fontWeight: 'bold', marginBottom: '8px', color: '#ff4081' }}>
+                  🐞 调试信息面板
+                </div>
+                <div style={{ marginBottom: '4px' }}>
+                  📹 <strong>当前视频:</strong> {currentVideoIndex} / {videos.length - 1}
+                </div>
+                <div style={{ marginBottom: '4px' }}>
+                  🎮 <strong>播放模式:</strong> {isRandomPlay ? '随机播放' : '顺序播放'}
+                </div>
                 {isRandomPlay && (
                   <>
-                    <div>顺序计数: {sequentialCount}/{SEQUENTIAL_BATCH_SIZE}</div>
-                    <div>随机队列: {randomPlayQueue.length}个</div>
-                    {randomPlayQueue.length > 0 && (
-                      <div>队列内容: {randomPlayQueue.join(', ')}</div>
+                    <div style={{ marginBottom: '4px' }}>
+                      📊 <strong>队列位置:</strong> {queueIndex + 1}/{QUEUE_SIZE}
+                    </div>
+                    {primaryQueue.length > 0 && (
+                      <div style={{ marginBottom: '4px', fontSize: '11px', color: '#4CAF50' }}>
+                        PRIMARY: [{primaryQueue.join(', ')}]
+                      </div>
                     )}
+                    {secondaryQueue.length > 0 && (
+                      <div style={{ marginBottom: '4px', fontSize: '11px', color: '#FF9800' }}>
+                        SECONDARY: [{secondaryQueue.join(', ')}]
+                      </div>
+                    )}
+                    <div style={{ marginBottom: '4px' }}>
+                      🎯 <strong>下一个视频:</strong> {(() => {
+                        const nextIdx = queueIndex + 1;
+                        if (nextIdx < primaryQueue.length) {
+                          return primaryQueue[nextIdx];
+                        }
+                        if (secondaryQueue.length > 0) {
+                          return secondaryQueue[0];
+                        }
+                        return '待生成';
+                      })()}
+                    </div>
                   </>
                 )}
-                <div>历史记录: {watchHistory.length}个</div>
-                <div>历史位置: {historyIndex}</div>
-                <div>加载时间: {loadTime}ms</div>
-                <div>缓冲级别: {bufferLevel.toFixed(1)}s</div>
-                <div>视频就绪: {isVideoReady ? '是' : '否'}</div>
+                <div style={{ marginBottom: '4px' }}>
+                  📚 <strong>历史记录:</strong> {watchHistory.length}个视频
+                </div>
+                <div style={{ marginBottom: '4px' }}>
+                  📍 <strong>历史位置:</strong> {historyIndex >= 0 ? historyIndex : '无'}
+                </div>
+                <div style={{ marginBottom: '4px' }}>
+                  ⏱️ <strong>加载时间:</strong> {loadTime}ms
+                </div>
+                <div style={{ marginBottom: '4px' }}>
+                  📦 <strong>缓冲级别:</strong> {bufferLevel.toFixed(1)}s
+                </div>
+                <div style={{ marginBottom: '4px' }}>
+                  ✅ <strong>视频就绪:</strong> {isVideoReady ? '是' : '否'}
+                </div>
               </Box>
             )}
           </>
