@@ -1,5 +1,5 @@
-import { AppBar, Toolbar, IconButton, FormControl, Select, MenuItem, InputLabel, Box } from '@mui/material';
-import { Home } from '@mui/icons-material';
+import { AppBar, Toolbar, IconButton, FormControl, Select, MenuItem, InputLabel, Box, Drawer, List, ListItem, ListItemIcon, ListItemText, Divider } from '@mui/material';
+import { Menu as MenuIcon, Settings, Info, HelpOutline } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import { useState, useEffect } from 'react';
 
@@ -13,6 +13,11 @@ interface NavbarProps {
 const Navbar = ({ selectedCategory, onCategoryChange, isDebugMode, onToggleDebugMode }: NavbarProps) => {
   const navigate = useNavigate();
   const [isSpinning, setIsSpinning] = useState(false);
+
+  // Drawer 抽屉菜单状态
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const handleDrawerOpen = () => setDrawerOpen(true);
+  const handleDrawerClose = () => setDrawerOpen(false);
 
   const handleToggleDebugMode = () => {
     setIsSpinning(true);
@@ -39,19 +44,66 @@ const Navbar = ({ selectedCategory, onCategoryChange, isDebugMode, onToggleDebug
     >
       <Toolbar sx={{ gap: 2, minHeight: '56px !important', justifyContent: 'space-between' }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+          {/* 列表按钮和抽屉菜单 */}
           <IconButton
             edge="start"
             color="inherit"
-            onClick={() => navigate('/')}
+            onClick={handleDrawerOpen}
             sx={{
               color: 'white',
+              background: 'none',
+              boxShadow: 'none',
+              outline: 'none',
               '&:hover': {
-                backgroundColor: 'rgba(255, 255, 255, 0.1)',
+                backgroundColor: 'transparent',
+                boxShadow: 'none',
+              },
+              '&:focus': {
+                outline: 'none',
+                boxShadow: 'none',
+              },
+              '&:active': {
+                backgroundColor: 'transparent',
+                boxShadow: 'none',
               },
             }}
           >
-            <Home />
+            <MenuIcon />
           </IconButton>
+          <Drawer
+            anchor="left"
+            open={drawerOpen}
+            onClose={handleDrawerClose}
+            PaperProps={{
+              sx: {
+                width: 240,
+                bgcolor: 'rgba(30,30,40,0.98)',
+                color: '#fff',
+                borderTopRightRadius: 16,
+                borderBottomRightRadius: 16,
+                boxShadow: '0 8px 32px rgba(0,0,0,0.18)',
+                p: 0,
+              }
+            }}
+          >
+            <Box sx={{ height: 56 }} /> {/* 顶部留白对齐AppBar */}
+            <List>
+              <ListItem button onClick={() => { /* 设置功能 */ handleDrawerClose(); }}>
+                <ListItemIcon><Settings sx={{ color: '#ff4081' }} /></ListItemIcon>
+                <ListItemText primary="设置" />
+              </ListItem>
+              <Divider sx={{ bgcolor: 'rgba(255,255,255,0.08)' }} />
+              <ListItem button onClick={() => { /* 关于功能 */ handleDrawerClose(); }}>
+                <ListItemIcon><Info sx={{ color: '#7c3aed' }} /></ListItemIcon>
+                <ListItemText primary="关于" />
+              </ListItem>
+              <Divider sx={{ bgcolor: 'rgba(255,255,255,0.08)' }} />
+              <ListItem button onClick={() => { /* 帮助功能 */ handleDrawerClose(); }}>
+                <ListItemIcon><HelpOutline sx={{ color: '#4caf50' }} /></ListItemIcon>
+                <ListItemText primary="帮助" />
+              </ListItem>
+            </List>
+          </Drawer>
 
           <FormControl 
             size="small"
@@ -88,9 +140,10 @@ const Navbar = ({ selectedCategory, onCategoryChange, isDebugMode, onToggleDebug
               onChange={(e) => onCategoryChange(e.target.value)}
             >
               <MenuItem value="all">全部视频</MenuItem>
-              <MenuItem value="videos">默认分类</MenuItem>
-              <MenuItem value="videos1">分类一</MenuItem>
-              <MenuItem value="videos2">分类二</MenuItem>
+              <MenuItem value="videos">原汁原味💦</MenuItem>
+              <MenuItem value="videos1">成人色情🔞</MenuItem>
+              <MenuItem value="videos2">擦边博主🥵</MenuItem>
+              <MenuItem value="top20">最热点赞😍</MenuItem>
             </Select>
           </FormControl>
         </Box>

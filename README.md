@@ -1,67 +1,129 @@
 # FavouriteLove - 本地视频播放器
 
-A TikTok-like video feed application that runs on your local network. This application allows you to browse and watch videos stored locally on your computer, with a similar interface to TikTok.
+一个类似TikTok的本地视频播放器，支持局域网访问，让你在本地网络环境中享受短视频体验。
 
-这是一个类似于TikTok的短视频项目，但是只支持本地部署，有点像一个私人定制的短视频网站。
+## ✨ 特性
 
-## Features
+- 🎥 垂直滚动视频播放
+- 🎮 视频控制（播放/暂停/进度条）
+- ❤️ 点赞/取消点赞功能
+- 📱 响应式设计，支持手机访问
+- 🏷️ 支持视频分类播放
+- ⚡ 自动播放和预加载机制
+- 🌐 局域网访问支持
+- 🗄️ MySQL数据库支持，自动同步视频信息
 
-- 垂直滚动视频播放
-- 视频控制（播放/暂停/进度条）
-- 点赞/取消点赞功能
-- 响应式设计
-- 支持视频分类播放
-- 自动播放功能
-- 预加载机制
-- 本地网络访问
+## 🚀 快速开始
 
-## Prerequisites
+### 环境要求
 
-- **Node.js** (v14或更高版本) - 安装后自动包含npm
+- **Node.js** (v14或更高版本)
+- **MySQL** (v8.0或更高版本)
 
-## 环境安装
+### 安装依赖
 
-### 下载并安装Node.js
-
-#### Windows系统
-1. 访问Node.js官网：https://nodejs.org/
-2. 下载LTS版本（推荐，更稳定）
-3. 运行下载的安装包（.msi文件）
-4. 按照安装向导完成安装
-
-#### Mac系统
-1. 访问Node.js官网：https://nodejs.org/
-2. 下载LTS版本的macOS安装包
-3. 运行.pkg安装文件
-4. 按照安装向导完成安装
-
-#### Linux系统
 ```bash
-# Ubuntu/Debian
-curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
-sudo apt-get install -y nodejs
-
-# CentOS/RHEL
-curl -fsSL https://rpm.nodesource.com/setup_lts.x | sudo bash -
-sudo yum install -y nodejs
+npm install --legacy-peer-deps
 ```
 
-### 验证安装
-```bash
-# 检查Node.js版本
-node --version
+### 数据库配置
 
-# 检查npm版本
-npm --version
+#### 1. 安装MySQL
+- 下载并安装MySQL Server 8.0
+- 安装时设置root用户密码（默认：140027）
+
+#### 2. 自动初始化（推荐）
+项目启动时会自动检查并创建数据库和表，无需手动操作。
+
+#### 3. 修改数据库位置（可选）
+
+如果你需要将MySQL数据目录移动到其他位置（如G盘），请按以下步骤操作：
+
+**步骤1：停止MySQL服务**
+```cmd
+net stop mysql80
 ```
 
-### 配置npm镜像（可选，国内用户推荐）
-```bash
-# 设置淘宝镜像，提高下载速度
-npm config set registry https://registry.npmmirror.com
+**步骤2：复制数据目录**
+```cmd
+xcopy "C:\ProgramData\MySQL\MySQL Server 8.0\Data" "G:\mysql\Data" /E /H /K /Y
 ```
 
-## Project Structure
+**步骤3：设置权限**
+```cmd
+icacls "G:\mysql\Data" /grant "NT SERVICE\mysql80":(OI)(CI)(F)
+```
+
+**步骤4：修改MySQL配置文件**
+找到MySQL配置文件（通常在 `C:\ProgramData\MySQL\MySQL Server 8.0\my.ini`），修改以下内容：
+
+```ini
+[mysqld]
+# 修改数据目录路径
+datadir=G:/mysql/Data
+
+# 其他配置保持不变
+port=3306
+socket=mysql
+key_buffer_size=16M
+max_allowed_packet=1M
+table_open_cache=64
+sort_buffer_size=512K
+net_buffer_length=8K
+read_buffer_size=256K
+read_rnd_buffer_size=512K
+myisam_sort_buffer_size=8M
+thread_cache_size=8
+query_cache_size=16M
+tmpdir=C:/Windows/Temp/
+```
+
+**步骤5：重启MySQL服务**
+```cmd
+net start mysql80
+```
+
+---
+
+> **注意：**
+> - 你只需安装好MySQL并记住root密码，项目会自动完成数据库和表的创建。
+> - 如果需要自定义数据库名、用户名或密码，请同步修改 `server/index.js` 中的配置。
+
+### 一键启动（推荐）
+
+```bash
+npm run dev:all
+```
+
+这个命令会：
+- 自动检测并配置本机IP地址
+- 自动检查并创建数据库和表（如果不存在）
+- 启动后端服务器（端口3001）
+- 启动前端开发服务器（端口5173）
+- 生成二维码供手机扫码访问
+- 自动同步本地视频到数据库
+
+### 分步启动
+
+如果你需要分别启动前后端：
+
+```bash
+# 启动后端服务器
+npm run server
+
+# 启动前端开发服务器
+npm run dev
+```
+
+## 📱 访问方式
+
+启动成功后，你可以通过以下方式访问：
+
+- **本机访问：** http://localhost:5173
+- **局域网访问：** http://[你的IP地址]:5173
+- **手机扫码：** 启动时会自动显示二维码
+
+## 📁 项目结构
 
 ```
 FavouriteLove/
@@ -72,117 +134,52 @@ FavouriteLove/
 │   ├── videos/            # 视频文件目录
 │   └── index.js           # 服务器入口
 ├── package.json           # 前端依赖配置
+├── set-ip-env.cjs        # IP自动配置脚本
 └── server/package.json    # 后端依赖配置
 ```
 
-## Setup Instructions
+## 🎬 添加视频
 
-### 1. 安装依赖
+1. 在 `server` 目录下创建视频文件夹：
+   ```bash
+   cd server
+   mkdir videos
+   ```
 
-#### 安装前端依赖
-```bash
-npm install
-```
+2. 将MP4格式的视频文件放入 `videos` 文件夹中
 
-#### 安装后端依赖
-```bash
-cd server
-npm install
-cd ..
-```
+3. 可选：创建多个分类文件夹
+   ```bash
+   mkdir videos1
+   mkdir videos2
+   mkdir videos3
+   ```
 
-### 2. 配置IP地址
+4. 重启应用，系统会自动同步新视频到数据库
 
-**重要：** 需要修改两个文件中的IP地址配置，以便在局域网中访问。
-
-#### 查看本机IP地址
-- **Windows:** 打开命令提示符，输入 `ipconfig`
-- **Mac/Linux:** 打开终端，输入 `ifconfig`
-- 找到你的局域网IP地址（通常是192.168.x.x格式）
-
-#### 修改配置文件
-
-**修改 `vite.config.ts`：**
-```typescript
-export default defineConfig({
-  plugins: [react()],
-  server: {
-    host: '你的IP地址',  // 例如: '192.168.1.100'
-    port: 5173,
-    strictPort: true,
-  }
-})
-```
-
-**修改 `src/components/VideoFeed.tsx`：**
-```typescript
-const API_BASE_URL = 'http://你的IP地址:3001';  // 例如: 'http://192.168.1.100:3001'
-```
-
-### 3. 准备视频文件
-
-在 `server` 目录下创建视频文件夹：
+## 🔧 其他命令
 
 ```bash
-cd server
-mkdir videos
+# 只配置IP地址
+npm run set-ip-env
+
+# 构建生产版本
+npm run build
+
+# 代码检查
+npm run lint
 ```
 
-**可选：创建多个分类文件夹**
-```bash
-mkdir videos1
-mkdir videos2
-mkdir videos3
-```
-
-将MP4格式的视频文件放入这些文件夹中。
-
-## Running the Application
-
-### 启动后端服务器
-```bash
-cd server
-npm start
-```
-后端将在端口3001运行，如果嫌太麻烦那就可以使用以下指令进行快捷执行，实际上效果相同
-
-```shell
-npm run server
-```
-
-### 启动前端开发服务器
-```bash
-# 在项目根目录
-npm run dev
-```
-前端将在端口5173运行
-
-### 访问应用
-- **本地访问：** http://localhost:5173
-- **局域网访问：** http://[你的IP地址]:5173
-
-## 手机访问设置
-
-如果想让手机访问，确保：
-
-1. **网络连接：** 手机和电脑连接同一个WiFi网络
-2. **IP配置：** 正确配置了IP地址（不能使用localhost）
-3. **防火墙设置：** 允许5173和3001端口的访问
-
-#### Windows防火墙设置
-1. 打开"Windows Defender 防火墙"
-2. 点击"允许应用或功能通过Windows Defender防火墙"
-3. 点击"更改设置"
-4. 找到Node.js，确保在"专用"和"公用"网络都勾选
-
-## 注意事项
+## ⚠️ 注意事项
 
 - **视频格式：** 只支持MP4格式的视频文件
 - **文件位置：** 视频文件必须放在 `server/videos` 目录下
-- **网络访问：** 如果要在局域网中访问，需要确保防火墙设置正确
-- **端口占用：** 确保3001和5173端口没有被其他程序占用
+- **网络访问：** 确保防火墙允许5173和3001端口访问
+- **依赖安装：** 如果遇到依赖冲突，请使用 `--legacy-peer-deps` 参数
+- **数据库：** 确保MySQL服务正在运行，默认端口3306
+- **数据库密码：** 默认密码为140027，如需修改请更新 `server/index.js` 中的配置
 
-## 故障排除
+## 🛠️ 故障排除
 
 ### 常见问题
 
@@ -201,23 +198,43 @@ npm run dev
    - 检查IP地址配置
    - 验证防火墙设置
 
+4. **数据库连接失败**
+   - 确认MySQL服务正在运行
+   - 检查数据库用户名和密码
+   - 验证数据库名称是否正确
+
+5. **视频信息不同步**
+   - 重启应用，系统会自动同步
+   - 检查数据库连接是否正常
+   - 查看服务器控制台错误信息
+
 ### 有用的命令
 
 ```bash
 # 查看端口占用情况
 netstat -ano | findstr :5173
 netstat -ano | findstr :3001
+netstat -ano | findstr :3306
 
 # 杀死占用端口的进程
 taskkill /PID [进程ID] /F
 
 # 查看本机IP地址
 ipconfig
+
+# MySQL服务管理
+net start mysql80
+net stop mysql80
+
+# 连接MySQL数据库
+mysql -u root -p
 ```
 
-## Notes
+## 📝 开发说明
 
-- The application only works with MP4 video files
-- Videos must be placed in the `server/videos` directory
-- The application is accessible from any device on your local network using your computer's IP address
 - 首次启动时建议先在本地（localhost）测试，确认功能正常后再配置局域网访问
+- 只有首次或依赖变动时需要 `npm install`，日常开发只需 `npm run dev:all`
+- 项目使用Vite作为构建工具，支持热重载
+- 后端使用Express框架，支持CORS跨域访问
+- 数据库使用MySQL，支持视频信息持久化存储
+- 系统会自动同步本地视频文件到数据库，无需手动管理

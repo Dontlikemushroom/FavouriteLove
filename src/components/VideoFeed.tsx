@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { Box, IconButton, Typography, CircularProgress, Switch, FormControlLabel, Slider, Button } from '@mui/material';
-import { Favorite, FavoriteBorder, PlayArrow, Pause, Shuffle, PlayCircle } from '@mui/icons-material';
+import { Favorite, FavoriteBorder, Shuffle, PlayCircle, Download, PlayArrow } from '@mui/icons-material';
 import axios from 'axios';
 
 interface Video {
@@ -16,7 +16,7 @@ interface VideoFeedProps {
   isDebugMode: boolean;
 }
 
-const API_BASE_URL = 'http://192.168.104.88:3001';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
 
 // Number of videos to preload
 const PRELOAD_COUNT = 3;
@@ -59,6 +59,25 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
   const [bufferLevel, setBufferLevel] = useState<number>(0);
   const [lastLoadStart, setLastLoadStart] = useState<number>(0);
 
+  // 新增：记录本轮已播过的视频 index
+  const [playedSet, setPlayedSet] = useState<Set<number>>(new Set());
+
+  // 判断是否为微信浏览器
+  const isWeChatBrowser = /micromessenger/i.test(navigator.userAgent);
+
+  // 微信浏览器下复制链接弹窗
+  const [showCopyDialog, setShowCopyDialog] = useState(false);
+  const [copyUrl, setCopyUrl] = useState('');
+
+  // 播放按钮动画控制
+  const [showCenterPlay, setShowCenterPlay] = useState(false);
+
+  // 2倍速提示
+  const [showSpeedTip, setShowSpeedTip] = useState(false);
+
+  // 长按判定定时器
+  const longPressTimer = useRef<number | null>(null);
+
   useEffect(() => {
     // 页面加载时清空历史记录
     localStorage.removeItem('watchHistory');
@@ -71,12 +90,15 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
       setLoading(true);
       setError(null);
       try {
-        const response = await axios.get(
-          selectedCategory === 'all'
-            ? `${API_BASE_URL}/api/videos`
-            : `${API_BASE_URL}/api/videos/${selectedCategory}`
-        );
-        const fetchedVideos = response.data;
+        let response;
+        if (selectedCategory === 'top20') {
+          response = await axios.get(`${API_BASE_URL}/api/videos/top20`);
+        } else if (selectedCategory === 'all') {
+          response = await axios.get(`${API_BASE_URL}/api/videos`);
+        } else {
+          response = await axios.get(`${API_BASE_URL}/api/videos/${selectedCategory}`);
+        }
+        let fetchedVideos = response.data;
         setVideos(fetchedVideos);
 
         // 刷新后随机定位视频
@@ -423,66 +445,95 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
   // 生成随机视频队列，可以传入需要排除的索引
   const generateRandomVideoQueue = (excludeIndices: Set<number> = new Set()) => {
     const queue: number[] = [];
-    const usedIndices = new Set(excludeIndices);
+    // 合并本轮已播过的和传入的排除集
+    const usedIndices = new Set([...playedSet, ...excludeIndices]);
     usedIndices.add(currentVideoIndex); // 总是排除当前视频
 
-    // 如果可选的视频太少，就允许重复
-    const availableVideos = videos.length - usedIndices.size;
-    if (availableVideos < QUEUE_SIZE) {
-      console.warn("可用视频不足，允许在队列中出现重复");
-      usedIndices.clear();
-      usedIndices.add(currentVideoIndex);
+    // 只要还有没播过的视频，就不允许重复
+    let availableIndices = [];
+    for (let i = 0; i < videos.length; i++) {
+      if (!usedIndices.has(i)) availableIndices.push(i);
     }
-    
+
+    // 如果可用视频不足队列长度，允许重复（重置 playedSet）
+    if (availableIndices.length < QUEUE_SIZE) {
+      availableIndices = [];
+      for (let i = 0; i < videos.length; i++) {
+        if (i !== currentVideoIndex) availableIndices.push(i);
+      }
+      // 重置已播集合
+      setPlayedSet(new Set([currentVideoIndex]));
+    }
+
+    while (queue.length < QUEUE_SIZE && availableIndices.length > 0) {
+      const idx = Math.floor(Math.random() * availableIndices.length);
+      queue.push(availableIndices[idx]);
+      availableIndices.splice(idx, 1);
+    }
+
+    // 如果队列还不够，允许重复填满
     while (queue.length < QUEUE_SIZE) {
       const randomIndex = Math.floor(Math.random() * videos.length);
-      if (!usedIndices.has(randomIndex)) {
-        queue.push(randomIndex);
-        usedIndices.add(randomIndex);
-      } else if (queue.length + availableVideos < QUEUE_SIZE) {
-        // 如果唯一视频不够，就从头开始允许重复
+      if (randomIndex !== currentVideoIndex) {
         queue.push(randomIndex);
       }
     }
-    
     return queue;
   };
 
-  // 初始化或重置随机播放队列
+  // 每次切换到新视频时，记录到 playedSet
   useEffect(() => {
     if (isRandomPlay && videos.length > 0) {
-      if (primaryQueue.length === 0) { // 只在主队列为空时初始化
-        console.log("初始化主、备队列...");
-        const initialPrimary = generateRandomVideoQueue();
-        const initialSecondary = generateRandomVideoQueue(new Set(initialPrimary));
-        
-        setPrimaryQueue(initialPrimary);
-        setSecondaryQueue(initialSecondary);
-        setQueueIndex(0);
-
-        console.log('主队列:', initialPrimary);
-        console.log('备用队列:', initialSecondary);
-      }
-    } else {
-      // 关闭随机播放时清空队列
-      setPrimaryQueue([]);
-      setSecondaryQueue([]);
+      setPlayedSet(prev => {
+        const newSet = new Set(prev);
+        newSet.add(currentVideoIndex);
+        return newSet;
+      });
     }
-  }, [isRandomPlay, videos.length]);
+  }, [currentVideoIndex, isRandomPlay, videos.length]);
 
   const handleVideoError = (e: React.SyntheticEvent<HTMLVideoElement, Event>) => {
     console.error('Video playback error:', e);
     setError('Error playing video');
   };
 
-  const toggleLike = (videoId: number) => {
-    const newLikedVideos = new Set(likedVideos);
-    if (likedVideos.has(videoId)) {
-      newLikedVideos.delete(videoId);
-    } else {
-      newLikedVideos.add(videoId);
+  const isLiked = (videoId: number) => {
+    return sessionStorage.getItem(`liked_video_${videoId}`) === '1';
+  };
+
+  const toggleLike = async (videoId: number) => {
+    const likedKey = `liked_video_${videoId}`;
+    const alreadyLiked = sessionStorage.getItem(likedKey);
+    try {
+      let response;
+      if (alreadyLiked) {
+        // 取消点赞
+        response = await axios.post(`${API_BASE_URL}/api/videos/${videoId}/unlike`);
+        sessionStorage.removeItem(likedKey);
+        setLikedVideos(prev => {
+          const newSet = new Set(prev);
+          newSet.delete(videoId);
+          return newSet;
+        });
+      } else {
+        // 点赞
+        response = await axios.post(`${API_BASE_URL}/api/videos/${videoId}/like`);
+        sessionStorage.setItem(likedKey, '1');
+        setLikedVideos(prev => {
+          const newSet = new Set(prev);
+          newSet.add(videoId);
+          return newSet;
+        });
+      }
+      const newLikeCount = response.data.like_count;
+      setVideos(prevVideos =>
+        prevVideos.map(video =>
+          video.id === videoId ? { ...video, likes: newLikeCount } : video
+        )
+      );
+    } catch (error) {
+      console.error('点赞/取消点赞失败:', error);
     }
-    setLikedVideos(newLikedVideos);
   };
 
   // 阻止浏览器下拉刷新（简化版本）
@@ -568,18 +619,6 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
     }
   };
 
-  const togglePlayPause = () => {
-    if (videoRef.current) {
-      if (videoRef.current.paused) {
-        videoRef.current.play();
-        setIsPlaying(true);
-      } else {
-        videoRef.current.pause();
-        setIsPlaying(false);
-      }
-    }
-  };
-
   const resetHistory = () => {
     setWatchHistory([]);
     setHistoryIndex(-1);
@@ -639,6 +678,67 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
       setProgress(newValue);
     }
   };
+
+  // 恢复播放/暂停功能
+  const togglePlayPause = () => {
+    if (videoRef.current) {
+      if (videoRef.current.paused) {
+        videoRef.current.play();
+        setIsPlaying(true);
+      } else {
+        videoRef.current.pause();
+        setIsPlaying(false);
+      }
+    }
+  };
+
+  // 关闭复制弹窗
+  const closeCopyDialog = () => setShowCopyDialog(false);
+
+  // 在暂停时显示中央播放按钮，播放时隐藏
+  useEffect(() => {
+    if (!isPlaying) {
+      setShowCenterPlay(true);
+    } else {
+      setShowCenterPlay(false);
+    }
+  }, [isPlaying]);
+
+  // 长按开始
+  const handleLongPressStart = () => {
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current);
+    }
+    longPressTimer.current = window.setTimeout(() => {
+      if (videoRef.current) {
+        videoRef.current.playbackRate = 2.0;
+        setShowSpeedTip(true);
+      }
+    }, 400); // 400ms为长按判定时间，可调整
+  };
+  // 长按结束
+  const handleLongPressEnd = () => {
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.playbackRate = 1.0;
+    }
+    setShowSpeedTip(false);
+  };
+
+  // 页面加载或视频列表变化时，同步sessionStorage点赞状态到likedVideos
+  useEffect(() => {
+    const likedSet = new Set<number>();
+    videos.forEach(video => {
+      if (sessionStorage.getItem(`liked_video_${video.id}`) === '1') {
+        likedSet.add(video.id);
+      }
+    });
+    setLikedVideos(likedSet);
+    // eslint-disable-next-line
+  }, [videos.length]);
 
   if (loading) {
     return (
@@ -736,7 +836,41 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
               onPlay={() => setIsPlaying(true)}
               onPause={() => setIsPlaying(false)}
               onClick={togglePlayPause}
+              onTouchStart={handleLongPressStart}
+              onTouchEnd={handleLongPressEnd}
+              onMouseDown={handleLongPressStart}
+              onMouseUp={handleLongPressEnd}
             />
+
+            {/* 中央播放按钮，仅在暂停时显示 */}
+            {showCenterPlay && (
+              <Box
+                sx={{
+                  position: 'absolute',
+                  top: '50%',
+                  left: '50%',
+                  transform: 'translate(-50%, -50%)',
+                  zIndex: 30,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  pointerEvents: 'none',
+                  opacity: 0.7,
+                  transition: 'opacity 0.3s',
+                  background: 'none',
+                  borderRadius: '50%',
+                  width: 90,
+                  height: 90,
+                  '@keyframes fadeInScale': {
+                    '0%': { opacity: 0, transform: 'translate(-50%, -50%) scale(0.7)' },
+                    '100%': { opacity: 0.7, transform: 'translate(-50%, -50%) scale(1)' },
+                  },
+                  animation: 'fadeInScale 0.3s',
+                }}
+              >
+                <PlayArrow sx={{ fontSize: 80, color: 'white', filter: 'drop-shadow(0 2px 8px rgba(0,0,0,0.4))' }} />
+              </Box>
+            )}
 
             {/* Preload videos */}
             {Array(PRELOAD_COUNT).fill(null).map((_, index) => (
@@ -800,6 +934,34 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
                 }}
               >
                 {touchFeedback}
+              </Box>
+            )}
+
+            {/* 2倍速提示 */}
+            {showSpeedTip && (
+              <Box
+                sx={{
+                  position: 'absolute',
+                  top: '64px',
+                  left: '50%',
+                  transform: 'translateX(-50%)',
+                  zIndex: 1201,
+                  background: 'rgba(0,0,0,0.55)',
+                  color: '#fff',
+                  px: 2,
+                  py: 0.5,
+                  borderRadius: '16px',
+                  fontWeight: 700,
+                  fontSize: '1.05rem',
+                  letterSpacing: '0.1em',
+                  boxShadow: '0 2px 8px rgba(0,0,0,0.12)',
+                  pointerEvents: 'none',
+                  userSelect: 'none',
+                  border: '1.5px solid #ff4081',
+                  opacity: 0.92,
+                }}
+              >
+                2x倍速
               </Box>
             )}
 
@@ -889,6 +1051,7 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
                 )}
               </Typography>
               
+              {isDebugMode && (
               <Box sx={{ 
                 display: 'flex', 
                 alignItems: 'center', 
@@ -951,32 +1114,6 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
                 >
                   重置记录 ({watchHistory.length})
                 </Button>
-                {isDebugMode && (
-                  <Typography variant="body2" sx={{ 
-                    color: historyIndex >= 0 ? '#ff4081' : '#4CAF50',
-                    backgroundColor: historyIndex >= 0 ? 'rgba(255, 64, 129, 0.2)' : 'rgba(76, 175, 80, 0.2)',
-                    fontSize: '0.7rem',
-                    ml: 1,
-                    padding: '2px 6px',
-                    borderRadius: '4px',
-                  }}
-                  >
-                    历史位置: {historyIndex >= 0 ? historyIndex : '无'}
-                  </Typography>
-                )}
-                {isDebugMode && (
-                  <Typography variant="body2" sx={{ 
-                    color: watchHistory.length > 0 ? '#4CAF50' : 'rgba(255, 255, 255, 0.7)',
-                    backgroundColor: watchHistory.length > 0 ? 'rgba(76, 175, 80, 0.2)' : 'rgba(0, 0, 0, 0.3)',
-                    fontSize: '0.7rem',
-                    ml: 1,
-                    padding: '2px 6px',
-                    borderRadius: '4px',
-                  }}
-                  >
-                    历史浏览: {watchHistory.length > 0 ? `${watchHistory.length}个视频` : '无'}
-                  </Typography>
-                )}
                 <Box sx={{ 
                   display: 'flex', 
                   alignItems: 'center', 
@@ -986,13 +1123,27 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
                 }}>
                   <IconButton
                     color="primary"
-                    onClick={togglePlayPause}
+                    onClick={() => {
+                      const url = `${API_BASE_URL}${videos[currentVideoIndex].url}`;
+                      if (isWeChatBrowser) {
+                        setCopyUrl(url);
+                        setShowCopyDialog(true);
+                      } else {
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = videos[currentVideoIndex].title + '.mp4';
+                        a.target = '_blank';
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                      }
+                    }}
                     sx={{ 
                       color: 'white',
                       padding: '8px',
                     }}
                   >
-                    {isPlaying ? <Pause sx={{ fontSize: '1.2rem' }} /> : <PlayArrow sx={{ fontSize: '1.2rem' }} />}
+                    <Download />
                   </IconButton>
                   <IconButton
                     color="primary"
@@ -1001,7 +1152,7 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
                       padding: '8px',
                     }}
                   >
-                    {likedVideos.has(videos[currentVideoIndex].id) ? (
+                    {isLiked(videos[currentVideoIndex].id) ? (
                       <Favorite sx={{ color: '#ff4081', fontSize: '1.2rem' }} />
                     ) : (
                       <FavoriteBorder sx={{ color: 'white', fontSize: '1.2rem' }} />
@@ -1017,6 +1168,7 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
                   </Typography>
                 </Box>
               </Box>
+              )}
             </Box>
 
             {/* Floating side control panel */}
@@ -1035,7 +1187,21 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
               }}
             >
               <IconButton
-                onClick={togglePlayPause}
+                onClick={() => {
+                  const url = `${API_BASE_URL}${videos[currentVideoIndex].url}`;
+                  if (isWeChatBrowser) {
+                    setCopyUrl(url);
+                    setShowCopyDialog(true);
+                  } else {
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = videos[currentVideoIndex].title + '.mp4';
+                    a.target = '_blank';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                  }
+                }}
                 sx={{
                   backgroundColor: 'rgba(0, 0, 0, 0.6)',
                   color: 'white',
@@ -1045,9 +1211,9 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
                     backgroundColor: 'rgba(0, 0, 0, 0.8)',
                   },
                 }}
-                title={isPlaying ? '暂停' : '播放'}
+                title={'下载当前视频'}
               >
-                {isPlaying ? <Pause /> : <PlayArrow />}
+                <Download />
               </IconButton>
 
               <IconButton
@@ -1071,16 +1237,16 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
                 onClick={() => toggleLike(videos[currentVideoIndex].id)}
                 sx={{
                   backgroundColor: 'rgba(0, 0, 0, 0.6)',
-                  color: likedVideos.has(videos[currentVideoIndex].id) ? '#ff4081' : 'white',
+                  color: isLiked(videos[currentVideoIndex].id) ? '#ff4081' : 'white',
                   width: '48px',
                   height: '48px',
                   '&:hover': {
                     backgroundColor: 'rgba(0, 0, 0, 0.8)',
                   },
                 }}
-                title={likedVideos.has(videos[currentVideoIndex].id) ? '取消点赞' : '点赞'}
+                title={isLiked(videos[currentVideoIndex].id) ? '取消点赞' : '点赞'}
               >
-                {likedVideos.has(videos[currentVideoIndex].id) ? <Favorite /> : <FavoriteBorder />}
+                {isLiked(videos[currentVideoIndex].id) ? <Favorite /> : <FavoriteBorder />}
               </IconButton>
               
               <IconButton
@@ -1205,6 +1371,67 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
                 <div style={{ marginBottom: '4px' }}>
                   ✅ <strong>视频就绪:</strong> {isVideoReady ? '是' : '否'}
                 </div>
+              </Box>
+            )}
+
+            {/* 微信浏览器下复制链接弹窗 */}
+            {showCopyDialog && (
+              <Box
+                sx={{
+                  position: 'fixed',
+                  top: 0,
+                  left: 0,
+                  width: '100vw',
+                  height: '100vh',
+                  bgcolor: 'rgba(0,0,0,0.5)',
+                  zIndex: 9999,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+                onClick={closeCopyDialog}
+              >
+                <Box
+                  sx={{
+                    background: 'white',
+                    borderRadius: 2,
+                    p: 3,
+                    minWidth: 280,
+                    boxShadow: 6,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    gap: 2,
+                  }}
+                  onClick={e => e.stopPropagation()}
+                >
+                  <Typography variant="h6" sx={{ color: '#ff4081', mb: 1, fontWeight: 700 }}>
+                    复制下载链接
+                  </Typography>
+                  <Typography variant="body2" sx={{ color: '#333', mb: 1 }}>
+                    长按下方链接进行复制，然后用浏览器打开并粘贴下载：
+                  </Typography>
+                  <input
+                    type="text"
+                    value={copyUrl}
+                    readOnly
+                    style={{
+                      width: '100%',
+                      fontSize: 16,
+                      padding: 8,
+                      border: '1px solid #ccc',
+                      borderRadius: 4,
+                      background: '#f7f7f7',
+                      color: '#222',
+                      textAlign: 'center',
+                    }}
+                    onFocus={e => (e.target as HTMLInputElement).select()}
+                    onClick={e => (e.target as HTMLInputElement).select()}
+                  />
+                  <Button variant="contained" color="primary" onClick={closeCopyDialog} sx={{ mt: 1 }}>
+                    关闭
+                  </Button>
+                </Box>
               </Box>
             )}
           </>

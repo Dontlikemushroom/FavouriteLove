@@ -9,7 +9,9 @@
     "server:dev": "cd server && npm run dev",
     "build": "tsc && vite build",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "set-ip-env": "node set-ip-env.cjs",
+    "dev:all": "npm run set-ip-env && concurrently \"npm run server\" \"npm run dev\""
   },
   "dependencies": {
     "@emotion/react": "^11.11.4",
@@ -27,9 +29,11 @@
     "@typescript-eslint/eslint-plugin": "^7.1.1",
     "@typescript-eslint/parser": "^7.1.1",
     "@vitejs/plugin-react": "^4.2.1",
+    "concurrently": "^9.2.0",
     "eslint": "^8.57.0",
     "eslint-plugin-react-hooks": "^4.6.0",
     "eslint-plugin-react-refresh": "^0.4.5",
+    "qrcode-terminal": "^0.12.0",
     "typescript": "^5.2.2",
     "vite": "^4.5.2"
   }
