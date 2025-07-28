@@ -2,6 +2,9 @@ import { useState, useEffect, useRef } from 'react';
 import { Box, IconButton, Typography, CircularProgress, Switch, FormControlLabel, Slider, Button } from '@mui/material';
 import { Favorite, FavoriteBorder, Shuffle, PlayCircle, Download, PlayArrow } from '@mui/icons-material';
 import axios from 'axios';
+import ChatBubbleIcon from '@mui/icons-material/ChatBubble';
+import LabelOutlinedIcon from '@mui/icons-material/LabelOutlined';
+import EditNoteIcon from '@mui/icons-material/EditNote';
 
 interface Video {
   id: number;
@@ -9,11 +12,16 @@ interface Video {
   title: string;
   likes: number;
   category: string;
+  file_name?: string;
 }
 
 interface VideoFeedProps {
   selectedCategory: string;
   isDebugMode: boolean;
+  selectedVideo?: Video | null;
+  onVideoSelect?: (video: Video) => void;
+  searchResults?: Video[]; // 新增：搜索结果
+  isSearchMode?: boolean;  // 新增：是否处于搜索模式
 }
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
@@ -21,7 +29,7 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001
 // Number of videos to preload
 const PRELOAD_COUNT = 3;
 
-const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
+const VideoFeed = ({ selectedCategory, isDebugMode, selectedVideo, onVideoSelect, searchResults, isSearchMode }: VideoFeedProps) => {
   const [currentVideoIndex, setCurrentVideoIndex] = useState(0);
   const [watchHistory, setWatchHistory] = useState<number[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
@@ -78,6 +86,68 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
   // 长按判定定时器
   const longPressTimer = useRef<number | null>(null);
 
+  // ===== 弹幕相关状态 =====
+  const [danmakus, setDanmakus] = useState<any[]>([]);
+  const [showDanmakuInput, setShowDanmakuInput] = useState(false);
+  const [danmakuInput, setDanmakuInput] = useState('');
+  const [currentTime, setCurrentTime] = useState(0);
+  const [activeDanmakus, setActiveDanmakus] = useState<any[]>([]);
+  const DANMAKU_ANIMATION_DURATION = 6; // 弹幕动画时长（秒，调慢）
+
+  // ===== 评论相关状态 =====
+  const [showCommentInput, setShowCommentInput] = useState(false);
+  const [commentInput, setCommentInput] = useState('');
+  const [comments, setComments] = useState<string[]>([]);
+  const [loadingComments, setLoadingComments] = useState(false);
+
+  // 新增：编辑标题弹窗状态
+  const [showEditTitle, setShowEditTitle] = useState(false);
+  const [editTitleInput, setEditTitleInput] = useState('');
+
+  // 新增：编辑文件名弹窗状态
+  const [showEditFileName, setShowEditFileName] = useState(false);
+  const [editFileNameInput, setEditFileNameInput] = useState('');
+
+  // 保存当前视频状态到localStorage
+  const saveCurrentVideoState = () => {
+    if (videos.length > 0 && currentVideoIndex >= 0) {
+      const currentVideo = videos[currentVideoIndex];
+      localStorage.setItem('lastVideoState', JSON.stringify({
+        videoId: currentVideo.id,
+        fileName: currentVideo.file_name,
+        title: currentVideo.title,
+        category: currentVideo.category,
+        timestamp: Date.now()
+      }));
+    }
+  };
+
+  // 处理从搜索中选中的视频
+  useEffect(() => {
+    if (selectedVideo && videos.length > 0) {
+      const videoIndex = videos.findIndex(video => 
+        video.id === selectedVideo.id || 
+        video.url === selectedVideo.url ||
+        video.file_name === selectedVideo.file_name
+      );
+      
+      if (videoIndex !== -1) {
+        setCurrentVideoIndex(videoIndex);
+        console.log(`搜索选中视频：定位到索引 ${videoIndex}`);
+      }
+    }
+  }, [selectedVideo, videos]);
+
+  // 处理搜索结果模式
+  useEffect(() => {
+    if (isSearchMode && searchResults && searchResults.length > 0) {
+      // 切换到搜索结果模式
+      setVideos(searchResults);
+      setCurrentVideoIndex(0);
+      console.log(`进入搜索模式：加载 ${searchResults.length} 个搜索结果`);
+    }
+  }, [isSearchMode, searchResults]);
+
   useEffect(() => {
     // 页面加载时清空历史记录
     localStorage.removeItem('watchHistory');
@@ -101,13 +171,44 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
         let fetchedVideos = response.data;
         setVideos(fetchedVideos);
 
-        // 刷新后随机定位视频
-        if (fetchedVideos.length > 0) {
-          const randomIndex = Math.floor(Math.random() * fetchedVideos.length);
-          setCurrentVideoIndex(randomIndex);
-          console.log(`页面加载：随机定位到视频索引 ${randomIndex}`);
+        // 尝试恢复上次的视频状态
+        const lastVideoState = localStorage.getItem('lastVideoState');
+        if (lastVideoState) {
+          try {
+            const state = JSON.parse(lastVideoState);
+            const videoIndex = fetchedVideos.findIndex((video: Video) => 
+              video.id === state.videoId || 
+              video.file_name === state.fileName ||
+              video.title === state.title
+            );
+            
+            if (videoIndex !== -1) {
+              setCurrentVideoIndex(videoIndex);
+              console.log(`页面加载：恢复到上次的视频索引 ${videoIndex}`);
+              // 清除状态，避免下次加载时重复使用
+              localStorage.removeItem('lastVideoState');
+            } else {
+              // 如果找不到原视频，随机定位
+              const randomIndex = Math.floor(Math.random() * fetchedVideos.length);
+              setCurrentVideoIndex(randomIndex);
+              console.log(`页面加载：随机定位到视频索引 ${randomIndex}`);
+            }
+          } catch (error) {
+            console.error('恢复视频状态失败:', error);
+            // 出错时随机定位
+            const randomIndex = Math.floor(Math.random() * fetchedVideos.length);
+            setCurrentVideoIndex(randomIndex);
+            console.log(`页面加载：随机定位到视频索引 ${randomIndex}`);
+          }
         } else {
-          setCurrentVideoIndex(0);
+          // 没有保存的状态，随机定位
+          if (fetchedVideos.length > 0) {
+            const randomIndex = Math.floor(Math.random() * fetchedVideos.length);
+            setCurrentVideoIndex(randomIndex);
+            console.log(`页面加载：随机定位到视频索引 ${randomIndex}`);
+          } else {
+            setCurrentVideoIndex(0);
+          }
         }
 
       } catch (error) {
@@ -660,6 +761,7 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
     const video = videoRef.current;
     if (video && video.duration > 0) {
       setProgress((video.currentTime / video.duration) * 100);
+      setCurrentTime(video.currentTime);
     }
   };
 
@@ -739,6 +841,86 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
     setLikedVideos(likedSet);
     // eslint-disable-next-line
   }, [videos.length]);
+
+  // 获取弹幕
+  useEffect(() => {
+    if (!videos[currentVideoIndex]) return;
+    axios.get(`${API_BASE_URL}/api/danmaku?videoId=${videos[currentVideoIndex].id}`)
+      .then(res => setDanmakus(res.data))
+      .catch(() => setDanmakus([]));
+  }, [currentVideoIndex, videos]);
+
+  // 弹幕激活与显示时长控制
+  useEffect(() => {
+    // 只保留当前时间点已出现且未超过动画时长的弹幕
+    setActiveDanmakus(prev => {
+      // 1. 先保留未到期的弹幕
+      const stillActive = Array.isArray(prev) ? prev.filter(d => currentTime - d._appearTime < DANMAKU_ANIMATION_DURATION) : [];
+      // 2. 新激活的弹幕
+      const newDanmakus = danmakus
+        .filter(d =>
+          d.time <= currentTime &&
+          d.time > currentTime - 0.5 && // 只在刚出现时激活
+          !stillActive.some(a => a.id === d.id && a.time === d.time)
+        )
+        .map(d => ({ ...d, _appearTime: currentTime }));
+      return [...stillActive, ...newDanmakus];
+    });
+  }, [currentTime, danmakus]);
+
+  // 发送弹幕函数
+  function sendDanmaku() {
+    if (!danmakuInput.trim()) return;
+    const video = videos[currentVideoIndex];
+    axios.post(`${API_BASE_URL}/api/danmaku`, {
+      videoId: video.id,
+      content: danmakuInput.trim(),
+      time: currentTime
+    }).then(res => {
+      setDanmakus(prev => [...prev, res.data]);
+      setShowDanmakuInput(false);
+      setDanmakuInput('');
+    }).catch(() => {
+      // 可加错误提示
+    });
+  }
+
+  // 获取评论
+  useEffect(() => {
+    if (!videos[currentVideoIndex]) return;
+    setLoadingComments(true);
+    axios.get(`${API_BASE_URL}/api/videos/${videos[currentVideoIndex].id}/comment`)
+      .then(res => {
+        const arr = (res.data.comments || '').split('\n').filter(Boolean);
+        setComments(arr);
+      })
+      .catch(() => setComments([]))
+      .finally(() => setLoadingComments(false));
+  }, [currentVideoIndex, videos]);
+
+  // 发送评论
+  function sendComment() {
+    if (!commentInput.trim()) return;
+    const video = videos[currentVideoIndex];
+    axios.post(`${API_BASE_URL}/api/videos/${video.id}/comment`, {
+      comment: commentInput.trim()
+    }).then(() => {
+      setComments([commentInput.trim()]); // 覆盖为最新评论
+      setCommentInput(''); // 只清空输入，不关闭输入框
+    }).catch((err) => {
+      alert('评论失败: ' + (err?.response?.data?.error || '网络错误'));
+    });
+  }
+
+  // 每次切换视频时打印当前 videos 数组
+  useEffect(() => {
+    if (videos.length > 0) {
+      console.log('切换到新视频，当前 videos 数组：', videos);
+    }
+  }, [currentVideoIndex, videos]);
+
+  // 调试面板视频对象展开/收起状态
+  const [showVideoObjDetail, setShowVideoObjDetail] = useState(false);
 
   if (loading) {
     return (
@@ -965,6 +1147,50 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
               </Box>
             )}
 
+            {/* 在视频标签下方渲染弹幕层 */}
+            {videos.length > 0 && (
+              <div
+                className="danmaku-layer"
+                style={{
+                  position: 'absolute',
+                  left: 0,
+                  right: 0,
+                  top: 0,
+                  bottom: 0,
+                  pointerEvents: 'none',
+                  zIndex: 15,
+                  overflow: 'hidden',
+                }}
+              >
+                {activeDanmakus.map((d, idx) => (
+                  <div
+                    key={d.id + '-' + idx}
+                    className="danmaku-item"
+                    style={{
+                      position: 'absolute',
+                      left: 0,
+                      top: `${12 + (idx % 8) * 8}%`,
+                      color: 'white',
+                      textShadow: '1px 1px 2px black',
+                      fontSize: 16,
+                      whiteSpace: 'nowrap',
+                      transform: 'translateX(100%)',
+                      animation: `danmaku-move ${DANMAKU_ANIMATION_DURATION}s linear`,
+                      pointerEvents: 'none',
+                    }}
+                  >
+                    {d.content}
+                  </div>
+                ))}
+                <style>{`
+                  @keyframes danmaku-move {
+                    from { transform: translateX(100%); }
+                    to { transform: translateX(-120%); }
+                  }
+                `}</style>
+              </div>
+            )}
+
             <Box
               sx={{
                 position: 'absolute',
@@ -1032,7 +1258,20 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
                   mb: 0.5
                 }}
               >
-                {videos[currentVideoIndex].title}
+                {(videos[currentVideoIndex].file_name || '').replace(/\.mp4$/i, '')}
+                {isSearchMode && (
+                  <Box component="span" sx={{ 
+                    ml: 1, 
+                    fontSize: '0.8em', 
+                    color: '#ff4081',
+                    backgroundColor: 'rgba(255, 64, 129, 0.2)',
+                    padding: '2px 8px',
+                    borderRadius: '12px',
+                    border: '1px solid #ff4081'
+                  }}>
+                    🔍 搜索结果
+                  </Box>
+                )}
                 {isDebugMode && watchHistory.length > 0 && (
                   <Typography variant="body2" sx={{ 
                     color: historyIndex >= 0 ? '#ff4081' : '#4CAF50',
@@ -1176,8 +1415,8 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
               sx={{
                 position: 'absolute',
                 right: '10px',
-                top: '50%',
-                transform: 'translateY(-50%)',
+                top: isDebugMode ? '72px' : '50%',
+                transform: isDebugMode ? 'none' : 'translateY(-50%)',
                 display: 'flex',
                 flexDirection: 'column',
                 gap: 1,
@@ -1186,104 +1425,7 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
                 transition: 'opacity 0.3s ease-in-out',
               }}
             >
-              <IconButton
-                onClick={() => {
-                  const url = `${API_BASE_URL}${videos[currentVideoIndex].url}`;
-                  if (isWeChatBrowser) {
-                    setCopyUrl(url);
-                    setShowCopyDialog(true);
-                  } else {
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = videos[currentVideoIndex].title + '.mp4';
-                    a.target = '_blank';
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
-                  }
-                }}
-                sx={{
-                  backgroundColor: 'rgba(0, 0, 0, 0.6)',
-                  color: 'white',
-                  width: '48px',
-                  height: '48px',
-                  '&:hover': {
-                    backgroundColor: 'rgba(0, 0, 0, 0.8)',
-                  },
-                }}
-                title={'下载当前视频'}
-              >
-                <Download />
-              </IconButton>
-
-              <IconButton
-                onClick={() => setAutoPlay(!autoPlay)}
-                sx={{
-                  backgroundColor: 'rgba(0, 0, 0, 0.6)',
-                  color: autoPlay ? '#ff4081' : 'white',
-                  width: '48px',
-                  height: '48px',
-                  border: autoPlay ? '2px solid #ff4081' : '2px solid transparent',
-                  '&:hover': {
-                    backgroundColor: 'rgba(0, 0, 0, 0.8)',
-                  },
-                }}
-                title={autoPlay ? '自动播放已开启' : '自动播放已关闭'}
-              >
-                <PlayCircle />
-              </IconButton>
-              
-              <IconButton
-                onClick={() => toggleLike(videos[currentVideoIndex].id)}
-                sx={{
-                  backgroundColor: 'rgba(0, 0, 0, 0.6)',
-                  color: isLiked(videos[currentVideoIndex].id) ? '#ff4081' : 'white',
-                  width: '48px',
-                  height: '48px',
-                  '&:hover': {
-                    backgroundColor: 'rgba(0, 0, 0, 0.8)',
-                  },
-                }}
-                title={isLiked(videos[currentVideoIndex].id) ? '取消点赞' : '点赞'}
-              >
-                {isLiked(videos[currentVideoIndex].id) ? <Favorite /> : <FavoriteBorder />}
-              </IconButton>
-              
-              <IconButton
-                onClick={() => setIsRandomPlay(!isRandomPlay)}
-                sx={{
-                  backgroundColor: 'rgba(0, 0, 0, 0.6)',
-                  color: isRandomPlay ? '#ff4081' : 'white',
-                  width: '48px',
-                  height: '48px',
-                  border: isRandomPlay ? '2px solid #ff4081' : '2px solid transparent',
-                  '&:hover': {
-                    backgroundColor: 'rgba(0, 0, 0, 0.8)',
-                  },
-                }}
-                title={isRandomPlay ? '随机播放已开启' : '随机播放已关闭'}
-              >
-                <Shuffle />
-              </IconButton>
-
-              <IconButton
-                onClick={resetHistory}
-                sx={{
-                  backgroundColor: 'rgba(0, 0, 0, 0.6)',
-                  color: 'white',
-                  width: '48px',
-                  height: '48px',
-                  fontSize: '10px',
-                  fontWeight: 'bold',
-                  '&:hover': {
-                    backgroundColor: 'rgba(0, 0, 0, 0.8)',
-                  },
-                }}
-                title="重置观看历史"
-              >
-                重置
-              </IconButton>
-
+              {/* 隐藏底部面板按钮（所有模式都显示） */}
               <IconButton
                 onClick={toggleBottomPanel}
                 sx={{
@@ -1299,6 +1441,234 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
               >
                 {showBottomPanel ? '▼' : '▲'}
               </IconButton>
+
+              {/* 用户模式下显示：点赞、弹幕、评论 */}
+              {!isDebugMode && (
+                <>
+                  <IconButton
+                    color="primary"
+                    onClick={() => toggleLike(videos[currentVideoIndex].id)}
+                    sx={{
+                      width: 48,
+                      height: 48,
+                      padding: 0,
+                      backgroundColor: 'rgba(0, 0, 0, 0.6)',
+                      color: isLiked(videos[currentVideoIndex].id) ? '#ff4081' : 'white',
+                      '&:hover': {
+                        backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                      },
+                    }}
+                    title={isLiked(videos[currentVideoIndex].id) ? '取消点赞' : '点赞'}
+                  >
+                    {isLiked(videos[currentVideoIndex].id)
+                      ? <Favorite sx={{ fontSize: 28 }} />
+                      : <FavoriteBorder sx={{ fontSize: 28 }} />}
+                  </IconButton>
+                  <IconButton
+                    onClick={() => setShowDanmakuInput(true)}
+                    sx={{
+                      backgroundColor: 'rgba(0, 0, 0, 0.6)',
+                      color: 'white',
+                      width: '48px',
+                      height: '48px',
+                      '&:hover': {
+                        backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                      },
+                    }}
+                    title="发送弹幕"
+                  >
+                    <span style={{fontWeight:'bold',fontSize:15,fontFamily:'Impact, Arial Black, sans-serif',letterSpacing:1}}>弹</span>
+                  </IconButton>
+                  <IconButton
+                    onClick={() => setShowCommentInput(true)}
+                    sx={{
+                      backgroundColor: 'rgba(0, 0, 0, 0.6)',
+                      color: 'white',
+                      width: '48px',
+                      height: '48px',
+                      '&:hover': {
+                        backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                      },
+                    }}
+                    title="评论视频"
+                  >
+                    <ChatBubbleIcon sx={{ fontSize: 18 }} />
+                  </IconButton>
+                </>
+              )}
+
+              {/* 调试模式下显示全部按钮 */}
+              {isDebugMode && (
+                <>
+                  <IconButton
+                    onClick={() => {
+                      const url = `${API_BASE_URL}${videos[currentVideoIndex].url}`;
+                      if (isWeChatBrowser) {
+                        setCopyUrl(url);
+                        setShowCopyDialog(true);
+                      } else {
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = videos[currentVideoIndex].file_name || videos[currentVideoIndex].title + '.mp4';
+                        a.target = '_blank';
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                      }
+                    }}
+                    sx={{
+                      backgroundColor: 'rgba(0, 0, 0, 0.6)',
+                      color: 'white',
+                      width: '48px',
+                      height: '48px',
+                      '&:hover': {
+                        backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                      },
+                    }}
+                    title={'下载当前视频'}
+                  >
+                    <Download />
+                  </IconButton>
+                  <IconButton
+                    onClick={() => setAutoPlay(!autoPlay)}
+                    sx={{
+                      backgroundColor: 'rgba(0, 0, 0, 0.6)',
+                      color: autoPlay ? '#ff4081' : 'white',
+                      width: '48px',
+                      height: '48px',
+                      border: autoPlay ? '2px solid #ff4081' : '2px solid transparent',
+                      '&:hover': {
+                        backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                      },
+                    }}
+                    title={autoPlay ? '自动播放已开启' : '自动播放已关闭'}
+                  >
+                    <PlayCircle />
+                  </IconButton>
+                  <IconButton
+                    color="primary"
+                    onClick={() => toggleLike(videos[currentVideoIndex].id)}
+                    sx={{
+                      width: 48,
+                      height: 48,
+                      padding: 0,
+                      backgroundColor: 'rgba(0, 0, 0, 0.6)',
+                      color: isLiked(videos[currentVideoIndex].id) ? '#ff4081' : 'white',
+                      '&:hover': {
+                        backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                      },
+                    }}
+                    title={isLiked(videos[currentVideoIndex].id) ? '取消点赞' : '点赞'}
+                  >
+                    {isLiked(videos[currentVideoIndex].id)
+                      ? <Favorite sx={{ fontSize: 28 }} />
+                      : <FavoriteBorder sx={{ fontSize: 28 }} />}
+                  </IconButton>
+                  <IconButton
+                    onClick={() => setIsRandomPlay(!isRandomPlay)}
+                    sx={{
+                      backgroundColor: 'rgba(0, 0, 0, 0.6)',
+                      color: isRandomPlay ? '#ff4081' : 'white',
+                      width: '48px',
+                      height: '48px',
+                      border: isRandomPlay ? '2px solid #ff4081' : '2px solid transparent',
+                      '&:hover': {
+                        backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                      },
+                    }}
+                    title={isRandomPlay ? '随机播放已开启' : '随机播放已关闭'}
+                  >
+                    <Shuffle />
+                  </IconButton>
+                  <IconButton
+                    onClick={resetHistory}
+                    sx={{
+                      backgroundColor: 'rgba(0, 0, 0, 0.6)',
+                      color: 'white',
+                      width: '48px',
+                      height: '48px',
+                      fontSize: '10px',
+                      fontWeight: 'bold',
+                      '&:hover': {
+                        backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                      },
+                    }}
+                    title="重置观看历史"
+                  >
+                    重置
+                  </IconButton>
+
+                  <IconButton
+                    onClick={() => setShowDanmakuInput(true)}
+                    sx={{
+                      backgroundColor: 'rgba(0, 0, 0, 0.6)',
+                      color: 'white',
+                      width: '48px',
+                      height: '48px',
+                      '&:hover': {
+                        backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                      },
+                    }}
+                    title="发送弹幕"
+                  >
+                    <span style={{fontWeight:'bold',fontSize:15,fontFamily:'Impact, Arial Black, sans-serif',letterSpacing:1}}>弹</span>
+                  </IconButton>
+                  <IconButton
+                    onClick={() => setShowCommentInput(true)}
+                    sx={{
+                      backgroundColor: 'rgba(0, 0, 0, 0.6)',
+                      color: 'white',
+                      width: '48px',
+                      height: '48px',
+                      '&:hover': {
+                        backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                      },
+                    }}
+                    title="评论视频"
+                  >
+                    <ChatBubbleIcon sx={{ fontSize: 18 }} />
+                  </IconButton>
+                  <IconButton
+                    onClick={() => {
+                      console.log('编辑标签输入框内容1:', videos[currentVideoIndex]?.title);
+                      setEditTitleInput(videos[currentVideoIndex].title);
+                      console.log('编辑标签输入框内容2:', editTitleInput);
+                      setShowEditTitle(true);
+                    }}
+                    sx={{
+                      backgroundColor: 'rgba(0, 0, 0, 0.6)',
+                      color: 'white',
+                      width: '48px',
+                      height: '48px',
+                      '&:hover': {
+                        backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                      },
+                    }}
+                    title="编辑标签"
+                  >
+                    <LabelOutlinedIcon sx={{ fontSize: 18 }} />
+                  </IconButton>
+                  <IconButton
+                    onClick={() => {
+                      saveCurrentVideoState(); // 保存当前视频状态
+                      setEditFileNameInput((videos[currentVideoIndex]?.file_name || '').replace(/\.mp4$/i, ''));
+                      setShowEditFileName(true);
+                    }}
+                    sx={{
+                      backgroundColor: 'rgba(0, 0, 0, 0.6)',
+                      color: 'white',
+                      width: '48px',
+                      height: '48px',
+                      '&:hover': {
+                        backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                      },
+                    }}
+                    title="编辑文件名"
+                  >
+                    <EditNoteIcon sx={{ fontSize: 18 }} />
+                  </IconButton>
+                </>
+              )}
             </Box>
 
             {/* Debug info - 仅在调试模式下显示 */}
@@ -1371,6 +1741,32 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
                 <div style={{ marginBottom: '4px' }}>
                   ✅ <strong>视频就绪:</strong> {isVideoReady ? '是' : '否'}
                 </div>
+                <div style={{ marginBottom: '4px', wordBreak: 'break-all', fontSize: '11px', background: 'rgba(255,255,255,0.05)', padding: '6px', borderRadius: '4px' }}>
+                  📝 <strong>当前视频对象:</strong>
+                  <button
+                    style={{
+                      fontSize: '11px',
+                      margin: '4px 0',
+                      padding: '2px 8px',
+                      borderRadius: '4px',
+                      border: '1px solid #ffb300',
+                      background: showVideoObjDetail ? '#ffb300' : 'transparent',
+                      color: showVideoObjDetail ? '#222' : '#ffb300',
+                      cursor: 'pointer',
+                    }}
+                    onClick={() => setShowVideoObjDetail(v => !v)}
+                  >
+                    {showVideoObjDetail ? '收起' : '展开'}
+                  </button>
+                  {showVideoObjDetail && videos[currentVideoIndex] && Object.entries(videos[currentVideoIndex])
+                    .filter(([key]) => !['url', 'likes', 'category'].includes(key))
+                    .map(([key, value]) => (
+                      <div key={key} style={{ display: 'flex', alignItems: 'flex-start', marginBottom: 2 }}>
+                        <span style={{ fontWeight: 'bold', minWidth: 60, color: '#ffb300', flexShrink: 0 }}>{key}:</span>
+                        <span style={{ wordBreak: 'break-all', whiteSpace: 'pre-wrap', marginLeft: 4 }}>{String(value)}</span>
+                      </div>
+                    ))}
+                </div>
               </Box>
             )}
 
@@ -1431,6 +1827,303 @@ const VideoFeed = ({ selectedCategory, isDebugMode }: VideoFeedProps) => {
                   <Button variant="contained" color="primary" onClick={closeCopyDialog} sx={{ mt: 1 }}>
                     关闭
                   </Button>
+                </Box>
+              </Box>
+            )}
+
+            {/* 弹幕输入弹窗 */}
+            {showDanmakuInput && (
+              <Box
+                sx={{
+                  position: 'fixed',
+                  bottom: '20%',
+                  left: '50%',
+                  transform: 'translateX(-50%)',
+                  background: 'rgba(0,0,0,0.85)',
+                  p: 2,
+                  borderRadius: 2,
+                  zIndex: 2000,
+                  display: 'flex',
+                  gap: 1,
+                  alignItems: 'center',
+                  minWidth: 260,
+                }}
+              >
+                <input
+                  value={danmakuInput}
+                  onChange={e => setDanmakuInput(e.target.value)}
+                  placeholder="输入弹幕内容"
+                  maxLength={50}
+                  style={{
+                    flex: 1,
+                    fontSize: 16,
+                    padding: '8px 12px',
+                    borderRadius: 6,
+                    border: '1px solid #ccc',
+                    outline: 'none',
+                  }}
+                  autoFocus
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') {
+                      sendDanmaku();
+                    }
+                  }}
+                />
+                <Button
+                  variant="contained"
+                  color="primary"
+                  size="small"
+                  sx={{ minWidth: 60, fontWeight: 700 }}
+                  onClick={sendDanmaku}
+                  disabled={!danmakuInput.trim()}
+                >发送</Button>
+                <Button
+                  variant="text"
+                  color="inherit"
+                  size="small"
+                  sx={{ minWidth: 40 }}
+                  onClick={() => setShowDanmakuInput(false)}
+                >取消</Button>
+              </Box>
+            )}
+
+            {/* 评论输入弹窗 */}
+            {showCommentInput && (
+              <Box
+                sx={{
+                  position: 'fixed',
+                  bottom: '24%',
+                  left: '50%',
+                  transform: 'translateX(-50%)',
+                  background: 'rgba(0,0,0,0.92)',
+                  p: 2,
+                  borderRadius: 2,
+                  zIndex: 2100,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 1,
+                  minWidth: 320,
+                  maxWidth: 520,
+                  width: '96vw',
+                  color: 'white',
+                }}
+              >
+                <Box sx={{ mb: 1, fontWeight: 700, fontSize: 16 }}>视频评论</Box>
+                <Box sx={{ maxHeight: 120, overflowY: 'auto', mb: 1, bgcolor: 'rgba(0,0,0,0.15)', borderRadius: 1, p: 1 }}>
+                  {loadingComments ? '加载中...' : (
+                    comments.length === 0 ? <span style={{ color: '#aaa' }}>暂无评论</span> :
+                    // 用textarea只读展示，便于长按/右键复制
+                    <textarea
+                      value={comments[0]}
+                      readOnly
+                      style={{
+                        width: '100%',
+                        minHeight: 50,
+                        fontSize: 14,
+                        background: 'transparent',
+                        color: 'white',
+                        border: 'none',
+                        resize: 'none',
+                        outline: 'none',
+                        padding: 0,
+                        margin: 0,
+                        cursor: 'copy',
+                        userSelect: 'text',
+                      }}
+                    />
+                  )}
+                </Box>
+                <textarea
+                  value={commentInput}
+                  onChange={e => setCommentInput(e.target.value)}
+                  placeholder="输入评论内容"
+                  maxLength={300}
+                  rows={3}
+                  style={{
+                    fontSize: 15,
+                    padding: '10px 14px',
+                    borderRadius: 6,
+                    border: '1px solid #ccc',
+                    outline: 'none',
+                    marginBottom: 8,
+                    width: '100%',
+                    minWidth: 220,
+                    maxWidth: 500,
+                    minHeight: 60,
+                    resize: 'vertical',
+                    boxSizing: 'border-box',
+                    background: '#181818',
+                    color: 'white',
+                  }}
+                  autoFocus
+                />
+                <Box sx={{ display: 'flex', gap: 1, mt: 1 }}>
+                  <Button
+                    variant="contained"
+                    color="primary"
+                    size="small"
+                    sx={{ minWidth: 60, fontWeight: 700 }}
+                    onClick={sendComment}
+                    disabled={!commentInput.trim()}
+                  >发送</Button>
+                  <Button
+                    variant="text"
+                    color="inherit"
+                    size="small"
+                    sx={{ minWidth: 40 }}
+                    onClick={() => setShowCommentInput(false)}
+                  >取消</Button>
+                </Box>
+              </Box>
+            )}
+
+            {/* 编辑标题弹窗 */}
+            {showEditTitle && (
+              <Box
+                sx={{
+                  position: 'fixed',
+                  bottom: '32%',
+                  left: '50%',
+                  transform: 'translateX(-50%)',
+                  background: 'rgba(0,0,0,0.92)',
+                  p: 2,
+                  borderRadius: 2,
+                  zIndex: 2200,
+                  minWidth: 320,
+                  maxWidth: 520,
+                  width: '96vw',
+                  color: 'white',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 1,
+                }}
+              >
+                <Box sx={{ mb: 1, fontWeight: 700, fontSize: 16 }}>编辑视频标签</Box>
+                <input
+                  value={editTitleInput}
+                  onChange={e => setEditTitleInput(e.target.value)}
+                  placeholder="输入新标签"
+                  maxLength={100}
+                  style={{
+                    fontSize: 15,
+                    padding: '10px 14px',
+                    borderRadius: 6,
+                    border: '1px solid #ccc',
+                    outline: 'none',
+                    marginBottom: 8,
+                    width: '100%',
+                    background: '#181818',
+                    color: 'white',
+                  }}
+                  autoFocus
+                />
+                <Box sx={{ display: 'flex', gap: 1, mt: 1 }}>
+                  <Button
+                    variant="contained"
+                    color="primary"
+                    size="small"
+                    sx={{ minWidth: 60, fontWeight: 700 }}
+                    onClick={async () => {
+                      const video = videos[currentVideoIndex];
+                      try {
+                        await axios.post(`${API_BASE_URL}/api/videos/${video.id}/title`, { title: editTitleInput });
+                        setVideos(prev =>
+                          prev.map(v => v.id === video.id ? { ...v, title: editTitleInput } : v)
+                        );
+                        console.log('编辑标签输入框内容3:', videos[currentVideoIndex]?.title);
+                        alert('标题修改成功');
+                        setShowEditTitle(false);
+                      } catch (err: any) {
+                        alert('标题修改失败: ' + (err?.response?.data?.error || '网络错误'));
+                      }
+                    }}
+                    disabled={!editTitleInput.trim()}
+                  >保存</Button>
+                  <Button
+                    variant="text"
+                    color="inherit"
+                    size="small"
+                    sx={{ minWidth: 40 }}
+                    onClick={() => setShowEditTitle(false)}
+                  >取消</Button>
+                </Box>
+              </Box>
+            )}
+
+            {/* 编辑文件名弹窗 */}
+            {showEditFileName && (
+              <Box
+                sx={{
+                  position: 'fixed',
+                  bottom: '32%',
+                  left: '50%',
+                  transform: 'translateX(-50%)',
+                  background: 'rgba(0,0,0,0.92)',
+                  p: 2,
+                  borderRadius: 2,
+                  zIndex: 2300,
+                  minWidth: 320,
+                  maxWidth: 520,
+                  width: '96vw',
+                  color: 'white',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 1,
+                }}
+              >
+                <Box sx={{ mb: 1, fontWeight: 700, fontSize: 16 }}>编辑文件名</Box>
+                <textarea
+                  value={editFileNameInput}
+                  onChange={e => setEditFileNameInput(e.target.value)}
+                  placeholder="输入新文件名"
+                  maxLength={100}
+                  rows={3}
+                  style={{
+                    fontSize: 15,
+                    padding: '10px 14px',
+                    borderRadius: 6,
+                    border: '1px solid #ccc',
+                    outline: 'none',
+                    marginBottom: 8,
+                    width: '100%',
+                    background: '#181818',
+                    color: 'white',
+                    resize: 'vertical',
+                    minHeight: 60,
+                    maxHeight: 140,
+                    boxSizing: 'border-box',
+                  }}
+                  autoFocus
+                />
+                <Box sx={{ display: 'flex', gap: 1, mt: 1 }}>
+                  <Button
+                    variant="contained"
+                    color="primary"
+                    size="small"
+                    sx={{ minWidth: 60, fontWeight: 700 }}
+                    onClick={async () => {
+                      const video = videos[currentVideoIndex];
+                      try {
+                        const newFileName = editFileNameInput.trim() + '.mp4';
+                        await axios.post(`${API_BASE_URL}/api/videos/${video.id}/file_name`, { file_name: newFileName });
+                        setVideos(prev =>
+                          prev.map(v => v.id === video.id ? { ...v, file_name: newFileName } : v)
+                        );
+                        alert('文件名修改成功');
+                        setShowEditFileName(false);
+                      } catch (err: any) {
+                        alert('文件名修改失败: ' + (err?.response?.data?.error || '网络错误'));
+                      }
+                    }}
+                    disabled={!editFileNameInput.trim()}
+                  >保存</Button>
+                  <Button
+                    variant="text"
+                    color="inherit"
+                    size="small"
+                    sx={{ minWidth: 40 }}
+                    onClick={() => setShowEditFileName(false)}
+                  >取消</Button>
                 </Box>
               </Box>
             )}

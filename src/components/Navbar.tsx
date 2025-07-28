@@ -2,15 +2,30 @@ import { AppBar, Toolbar, IconButton, FormControl, Select, MenuItem, InputLabel,
 import { Menu as MenuIcon, Settings, Info, HelpOutline } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import { useState, useEffect } from 'react';
+import SearchBar from './SearchBar';
+
+interface Video {
+  id: number;
+  url: string;
+  title: string;
+  likes: number;
+  category: string;
+  file_name: string;
+}
 
 interface NavbarProps {
   selectedCategory: string;
   onCategoryChange: (category: string) => void;
   isDebugMode: boolean;
   onToggleDebugMode: () => void;
+  onVideoSelect?: (video: Video) => void;
+  onSearchResults?: (results: Video[]) => void;
+  onExitSearchMode?: () => void;
+  videoAreaRef?: React.RefObject<HTMLDivElement>;
+  isSearchMode?: boolean;
 }
 
-const Navbar = ({ selectedCategory, onCategoryChange, isDebugMode, onToggleDebugMode }: NavbarProps) => {
+const Navbar = ({ selectedCategory, onCategoryChange, isDebugMode, onToggleDebugMode, onVideoSelect, onSearchResults, onExitSearchMode, videoAreaRef, isSearchMode }: NavbarProps) => {
   const navigate = useNavigate();
   const [isSpinning, setIsSpinning] = useState(false);
 
@@ -44,32 +59,66 @@ const Navbar = ({ selectedCategory, onCategoryChange, isDebugMode, onToggleDebug
     >
       <Toolbar sx={{ gap: 2, minHeight: '56px !important', justifyContent: 'space-between' }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-          {/* 列表按钮和抽屉菜单 */}
-          <IconButton
-            edge="start"
-            color="inherit"
-            onClick={handleDrawerOpen}
-            sx={{
-              color: 'white',
-              background: 'none',
-              boxShadow: 'none',
-              outline: 'none',
-              '&:hover': {
-                backgroundColor: 'transparent',
+          {/* 搜索模式下显示退出搜索按钮，否则显示菜单按钮 */}
+          {isSearchMode ? (
+            <IconButton
+              edge="start"
+              color="inherit"
+              onClick={() => {
+                if (onExitSearchMode) {
+                  onExitSearchMode();
+                }
+                window.location.reload();
+              }}
+              sx={{
+                color: 'white',
+                background: 'none',
                 boxShadow: 'none',
-              },
-              '&:focus': {
                 outline: 'none',
+                '&:hover': {
+                  backgroundColor: 'transparent',
+                  boxShadow: 'none',
+                },
+                '&:focus': {
+                  outline: 'none',
+                  boxShadow: 'none',
+                },
+                '&:active': {
+                  backgroundColor: 'transparent',
+                  boxShadow: 'none',
+                },
+              }}
+              title="退出搜索模式"
+            >
+              🏠
+            </IconButton>
+          ) : (
+            <IconButton
+              edge="start"
+              color="inherit"
+              onClick={handleDrawerOpen}
+              sx={{
+                color: 'white',
+                background: 'none',
                 boxShadow: 'none',
-              },
-              '&:active': {
-                backgroundColor: 'transparent',
-                boxShadow: 'none',
-              },
-            }}
-          >
-            <MenuIcon />
-          </IconButton>
+                outline: 'none',
+                '&:hover': {
+                  backgroundColor: 'transparent',
+                  boxShadow: 'none',
+                },
+                '&:focus': {
+                  outline: 'none',
+                  boxShadow: 'none',
+                },
+                '&:active': {
+                  backgroundColor: 'transparent',
+                  boxShadow: 'none',
+                },
+              }}
+            >
+              <MenuIcon />
+            </IconButton>
+          )}
           <Drawer
             anchor="left"
             open={drawerOpen}
@@ -146,6 +195,17 @@ const Navbar = ({ selectedCategory, onCategoryChange, isDebugMode, onToggleDebug
               <MenuItem value="top20">最热点赞😍</MenuItem>
             </Select>
           </FormControl>
+
+          {/* 搜索框 */}
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <SearchBar 
+              selectedCategory={selectedCategory}
+              onVideoSelect={onVideoSelect || (() => {})}
+              onSearchResults={onSearchResults}
+              onExitSearchMode={onExitSearchMode}
+              videoAreaRef={videoAreaRef}
+            />
+          </Box>
         </Box>
 
         {/* 模式切换按钮 - 右侧 */}

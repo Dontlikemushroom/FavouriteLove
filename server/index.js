@@ -133,7 +133,7 @@ app.get('/api/videos/top20', async (req, res) => {
         return {
           id: row.id,
           url,
-          title: row.title,
+          title: row.title, // 直接用数据库 title 字段
           likes: row.like_count,
           category: 'top20',
           file_name: row.file_name
@@ -164,11 +164,11 @@ app.get('/api/videos', async (req, res) => {
     let videoIndex = 1;
     let dbLikeMap = {};
 
-    // 查询所有点赞数
+    // 查询所有视频的 id, file_name, like_count, title
     try {
-      const [rows] = await pool.query('SELECT id, file_name, like_count FROM videos');
+      const [rows] = await pool.query('SELECT id, file_name, like_count, title FROM videos');
       dbLikeMap = rows.reduce((acc, row) => {
-        acc[row.file_name] = { like_count: row.like_count, id: row.id };
+        acc[row.file_name] = { like_count: row.like_count, id: row.id, title: row.title };
         return acc;
       }, {});
     } catch (err) {
@@ -186,11 +186,11 @@ app.get('/api/videos', async (req, res) => {
           });
 
         const videos = files.map(file => {
-          const dbLike = dbLikeMap[file] || { like_count: 0 };
+          const dbLike = dbLikeMap[file] || { like_count: 0, title: file.replace('.mp4', '') };
           return {
             id: dbLikeMap[file]?.id || videoIndex++,
             url: `/${dirName}/${encodeURIComponent(file)}`,
-            title: file.replace('.mp4', ''),
+            title: dbLike.title, // 优先用数据库 title 字段
             likes: dbLike.like_count,
             category: dirName,
             file_name: file
@@ -207,6 +207,95 @@ app.get('/api/videos', async (req, res) => {
   } catch (error) {
     console.error('读取视频错误:', error);
     res.status(500).json({ error: '读取视频失败', details: error.message });
+  }
+});
+
+// 搜索视频API
+app.get('/api/search', async (req, res) => {
+  const { q: query, category } = req.query;
+  
+  if (!query || query.trim() === '') {
+    return res.json([]);
+  }
+
+  try {
+    console.log(`【搜索】收到搜索请求: query="${query}", category="${category}"`);
+    
+    let allVideos = [];
+    let dbLikeMap = {};
+
+    // 查询所有点赞数
+    try {
+      const [rows] = await pool.query('SELECT id, file_name, like_count, title FROM videos');
+      dbLikeMap = rows.reduce((acc, row) => {
+        acc[row.file_name] = { like_count: row.like_count, id: row.id, title: row.title };
+        return acc;
+      }, {});
+    } catch (err) {
+      console.error('查询数据库点赞数失败:', err);
+    }
+
+    // 如果指定了分类，只搜索该分类
+    if (category && category !== 'all' && VIDEO_DIRS[category]) {
+      const dirPath = VIDEO_DIRS[category];
+      if (fs.existsSync(dirPath)) {
+        const files = fs.readdirSync(dirPath)
+          .filter(file => file.endsWith('.mp4'))
+          .filter(file => {
+            const fileName = file.toLowerCase();
+            const searchQuery = query.toLowerCase();
+            return fileName.includes(searchQuery);
+          });
+
+        const videos = files.map(file => {
+          const dbLike = dbLikeMap[file] || { like_count: 0, title: file.replace('.mp4', '') };
+          return {
+            id: dbLikeMap[file]?.id || Math.random(),
+            url: `/${category}/${encodeURIComponent(file)}`,
+            title: dbLike.title, // 优先用数据库title字段
+            likes: dbLike.like_count,
+            category: category,
+            file_name: file
+          };
+        });
+        allVideos = [...allVideos, ...videos];
+      }
+    } else {
+      // 搜索所有分类
+      Object.entries(VIDEO_DIRS).forEach(([dirName, dirPath]) => {
+        if (fs.existsSync(dirPath)) {
+          const files = fs.readdirSync(dirPath)
+            .filter(file => file.endsWith('.mp4'))
+            .filter(file => {
+              const fileName = file.toLowerCase();
+              const searchQuery = query.toLowerCase();
+              return fileName.includes(searchQuery);
+            });
+
+          const videos = files.map(file => {
+            const dbLike = dbLikeMap[file] || { like_count: 0, title: file.replace('.mp4', '') };
+            return {
+              id: dbLikeMap[file]?.id || Math.random(),
+              url: `/${dirName}/${encodeURIComponent(file)}`,
+              title: dbLike.title, // 优先用数据库title字段
+              likes: dbLike.like_count,
+              category: dirName,
+              file_name: file
+            };
+          });
+          allVideos = [...allVideos, ...videos];
+        }
+      });
+    }
+
+    // 按点赞数排序
+    allVideos.sort((a, b) => b.likes - a.likes);
+    
+    console.log(`【搜索】找到 ${allVideos.length} 个匹配视频`);
+    res.json(allVideos);
+  } catch (error) {
+    console.error('搜索视频失败:', error);
+    res.status(500).json({ error: '搜索失败', details: error.message });
   }
 });
 
@@ -237,9 +326,9 @@ app.get('/api/videos/:category', async (req, res) => {
     // 查询该分类下所有视频的点赞数
     let dbLikeMap = {};
     try {
-      const [rows] = await pool.query('SELECT id, file_name, like_count FROM videos');
+      const [rows] = await pool.query('SELECT id, file_name, like_count, title FROM videos');
       dbLikeMap = rows.reduce((acc, row) => {
-        acc[row.file_name] = { like_count: row.like_count, id: row.id };
+        acc[row.file_name] = { like_count: row.like_count, id: row.id, title: row.title };
         return acc;
       }, {});
     } catch (err) {
@@ -255,11 +344,11 @@ app.get('/api/videos/:category', async (req, res) => {
       });
 
     const videos = files.map((file, index) => {
-      const dbLike = dbLikeMap[file] || { like_count: 0 };
+      const dbLike = dbLikeMap[file] || { like_count: 0, title: file.replace('.mp4', '') };
       return {
         id: dbLikeMap[file]?.id || index + 1,
         url: `/${category}/${encodeURIComponent(file)}`,
-        title: file.replace('.mp4', ''),
+        title: dbLike.title, // 优先用数据库 title 字段
         likes: dbLike.like_count,
         category,
         file_name: file
@@ -316,6 +405,142 @@ app.post('/api/videos/:id/unlike', async (req, res) => {
   }
 });
 
+// 修改视频标题
+app.post('/api/videos/:id/title', async (req, res) => {
+  const videoId = req.params.id;
+  const { title } = req.body;
+  if (!title || !title.trim()) {
+    return res.status(400).json({ error: '标题不能为空' });
+  }
+  try {
+    const [rows] = await pool.query('SELECT id FROM videos WHERE id = ?', [videoId]);
+    if (rows.length === 0) {
+      return res.status(404).json({ error: '视频未找到' });
+    }
+    await pool.query('UPDATE videos SET title = ? WHERE id = ?', [title.trim(), videoId]);
+    videoListCache.flushAll(); // 修改后刷新缓存
+    res.json({ success: true });
+    console.log('标题修改成功', videoId, title);
+  } catch (err) {
+    console.error('修改标题失败:', err);
+    res.status(500).json({ error: '修改标题失败', details: err.message });
+  }
+});
+
+// 修改视频文件名
+app.post('/api/videos/:id/file_name', async (req, res) => {
+  const videoId = req.params.id;
+  const { file_name } = req.body;
+  if (!file_name || !file_name.trim()) {
+    return res.status(400).json({ error: '文件名不能为空' });
+  }
+  try {
+    // 查出原有 file_name 和 file_path
+    const [rows] = await pool.query('SELECT file_name, file_path FROM videos WHERE id = ?', [videoId]);
+    if (rows.length === 0) {
+      return res.status(404).json({ error: '视频未找到' });
+    }
+    const oldFileName = rows[0].file_name;
+    const filePath = rows[0].file_path;
+    const oldFullPath = path.join(filePath, oldFileName);
+    let newFileName = file_name.trim();
+    if (!newFileName.toLowerCase().endsWith('.mp4')) {
+      newFileName += '.mp4';
+    }
+    const newFullPath = path.join(filePath, newFileName);
+
+    // 检查新文件名是否已存在
+    if (fs.existsSync(newFullPath)) {
+      return res.status(400).json({ error: '新文件名已存在' });
+    }
+
+    // 重命名磁盘文件
+    fs.renameSync(oldFullPath, newFullPath);
+
+    // 更新数据库
+    await pool.query('UPDATE videos SET file_name = ? WHERE id = ?', [newFileName, videoId]);
+    videoListCache.flushAll(); // 修改后刷新缓存
+    res.json({ success: true });
+    console.log('文件名修改成功', videoId, oldFileName, '=>', newFileName);
+  } catch (err) {
+    console.error('修改文件名失败:', err);
+    res.status(500).json({ error: '修改文件名失败', details: err.message });
+  }
+});
+
+// ===== 弹幕API =====
+// 获取某视频的弹幕
+app.get('/api/danmaku', async (req, res) => {
+  const { videoId } = req.query;
+  if (!videoId) return res.status(400).json({ error: '缺少videoId参数' });
+  try {
+    const [rows] = await pool.query(
+      'SELECT * FROM danmaku WHERE video_id = ? ORDER BY time ASC',
+      [videoId]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('获取弹幕失败:', err);
+    res.status(500).json({ error: '获取弹幕失败', details: err.message });
+  }
+});
+
+// 添加弹幕
+app.post('/api/danmaku', async (req, res) => {
+  const { videoId, content, time } = req.body;
+  if (!videoId || !content || time === undefined) {
+    return res.status(400).json({ error: '参数缺失' });
+  }
+  try {
+    const [result] = await pool.query(
+      'INSERT INTO danmaku (video_id, content, time) VALUES (?, ?, ?)',
+      [videoId, content, time]
+    );
+    res.json({ id: result.insertId, videoId, content, time });
+  } catch (err) {
+    console.error('添加弹幕失败:', err);
+    res.status(500).json({ error: '添加弹幕失败', details: err.message });
+  }
+});
+
+// ===== 视频评论API =====
+// 获取评论
+app.get('/api/videos/:id/comment', async (req, res) => {
+  const videoId = req.params.id;
+  try {
+    const [rows] = await pool.query('SELECT description FROM videos WHERE id = ?', [videoId]);
+    if (rows.length === 0) return res.status(404).json({ error: '视频未找到' });
+    res.json({ comments: rows[0].description || '' });
+  } catch (err) {
+    res.status(500).json({ error: '获取评论失败', details: err.message });
+  }
+});
+// 添加评论（追加到description字段）
+app.post('/api/videos/:id/comment', async (req, res) => {
+  const videoId = req.params.id;
+  const { comment } = req.body;
+  console.log('收到评论请求', videoId, comment);
+  if (!comment || !comment.trim()) {
+    console.log('评论内容为空');
+    return res.status(400).json({ error: '评论内容不能为空' });
+  }
+  try {
+    // 只覆盖，不追加
+    const [rows] = await pool.query('SELECT id FROM videos WHERE id = ?', [videoId]);
+    if (rows.length === 0) {
+      console.log('视频未找到', videoId);
+      return res.status(404).json({ error: '视频未找到' });
+    }
+    await pool.query('UPDATE videos SET description = ? WHERE id = ?', [comment.trim(), videoId]);
+    videoListCache.flushAll(); // 修改后刷新缓存
+    res.json({ success: true });
+    console.log('评论写入成功', videoId);
+  } catch (err) {
+    console.error('添加评论失败:', err); // 打印详细错误日志
+    res.status(500).json({ error: '添加评论失败', details: err.message });
+  }
+});
+
 // 辅助函数：根据数据库行生成视频URL
 function encodeVideoUrl(row) {
   // 假设 category 字段和目录名一致
@@ -364,7 +589,7 @@ async function initializeDatabase() {
     database: 'FavouriteLove'
   });
   try {
-    // 检查表是否存在
+    // 检查 videos 表是否存在
     const [tables] = await dbConn.execute('SHOW TABLES LIKE "videos"');
     if (tables.length === 0) {
       console.log('数据表不存在，正在创建 videos 表...');
@@ -386,6 +611,25 @@ async function initializeDatabase() {
     } else {
       console.log('数据表已存在');
     }
+
+    // 检查 danmaku 表是否存在
+    const [danmakuTables] = await dbConn.execute('SHOW TABLES LIKE "danmaku"');
+    if (danmakuTables.length === 0) {
+      console.log('danmaku 表不存在，正在创建 danmaku 表...');
+      await dbConn.execute(`
+        CREATE TABLE danmaku (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          video_id INT NOT NULL,
+          content VARCHAR(255) NOT NULL,
+          time FLOAT NOT NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+      console.log('danmaku 表创建成功！');
+    } else {
+      console.log('danmaku 表已存在');
+    }
+
     await dbConn.end();
     console.log('数据库初始化完成！');
   } catch (error) {
